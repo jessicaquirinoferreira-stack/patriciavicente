@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Menu, MessageCircle, X } from 'lucide-react';
+import { Lock, Menu, MessageCircle, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import type { SiteSettings } from '../../types/realEstate';
 import { buildWhatsAppUrl } from '../../utils/utm';
@@ -48,7 +48,7 @@ export function PublicHeader({
 
   return (
     <header className="sticky top-0 z-40 bg-[#FAF9F6]/95 backdrop-blur-md border-b border-[#E6E2DA]">
-      <div className="max-w-[1280px] mx-auto px-5 sm:px-8 h-20 sm:h-[88px] flex items-center justify-between gap-8">
+      <div className="max-w-[1280px] mx-auto px-5 sm:px-8 h-20 sm:h-[88px] flex items-center justify-between gap-6">
         {/* Zone 1: Brand Logo */}
         <a
           href="/"
@@ -118,8 +118,20 @@ export function PublicHeader({
           })}
         </nav>
 
-        {/* Zone 3: Single Primary Action */}
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Zone 3: Painel + Primary CTA */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <a
+            href="/admin"
+            onClick={(e) => {
+              e.preventDefault();
+              handleLinkClick('/admin');
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#52525B] bg-white border border-[#E6E2DA] rounded-lg hover:border-[#1E4D5C] hover:text-[#18181B] transition-colors whitespace-nowrap shrink-0"
+          >
+            <Lock className="w-3 h-3" />
+            <span>Painel</span>
+          </a>
+
           <a
             href={whatsappHref}
             target="_blank"
@@ -176,6 +188,17 @@ export function PublicHeader({
                   </a>
                 );
               })}
+              <a
+                href="/admin"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleLinkClick('/admin');
+                }}
+                className="px-3 py-3 rounded-xl text-base font-medium text-[#52525B] hover:bg-[#F3F1EC] inline-flex items-center gap-2"
+              >
+                <Lock className="w-4 h-4" />
+                <span>Painel</span>
+              </a>
             </nav>
             <div className="mt-4 pt-4 border-t border-[#E6E2DA]">
               <a

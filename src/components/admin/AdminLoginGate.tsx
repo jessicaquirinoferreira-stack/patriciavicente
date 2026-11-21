@@ -36,6 +36,7 @@ export function AdminLoginGate({
   const handleCredentialLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanEmail = email.trim().toLowerCase();
+    const cleanPassword = password.trim();
     if (!cleanEmail || !password) {
       setError('Informe seu login e senha para entrar.');
       return;
@@ -44,34 +45,60 @@ export function AdminLoginGate({
     setError('');
     setSigningIn(true);
     try {
-      const result = await loginWithCredentials(cleanEmail, password);
-      if (!result.ok || !result.email) {
-        setError(result.error || 'Login ou senha inválidos.');
-        return;
-      }
+      const serverResult = await loginWithCredentials(cleanEmail, password);
 
-      // Sincroniza e auto-cadastra no Firebase Auth se o provedor E-mail/Senha estiver ativo no Console
+      let firebaseEmail: string | null = null;
+      let firebaseErrorCode = '';
       try {
-        await signInWithEmailAndPassword(auth, cleanEmail, password);
+        const fbCred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+        firebaseEmail = fbCred.user.email || cleanEmail;
       } catch (fbErr: unknown) {
-        const code =
+        firebaseErrorCode =
           typeof fbErr === 'object' && fbErr !== null && 'code' in fbErr
             ? String((fbErr as { code?: unknown }).code)
             : '';
+
         if (
-          code === 'auth/user-not-found' ||
-          code === 'auth/invalid-credential' ||
-          code === 'auth/wrong-password'
+          !firebaseEmail &&
+          cleanPassword &&
+          cleanPassword !== password &&
+          (firebaseErrorCode === 'auth/wrong-password' ||
+            firebaseErrorCode === 'auth/invalid-credential')
         ) {
           try {
-            await createUserWithEmailAndPassword(auth, cleanEmail, password);
+            const retryCred = await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+            firebaseEmail = retryCred.user.email || cleanEmail;
           } catch {
-            // Se o provedor Email/Senha ainda não estiver ativo no Firebase Console, mantém acesso via sessão segura
+            // Keep initial firebaseErrorCode
+          }
+        }
+
+        if (
+          !firebaseEmail &&
+          serverResult.ok &&
+          (firebaseErrorCode === 'auth/user-not-found' ||
+            firebaseErrorCode === 'auth/invalid-credential' ||
+            firebaseErrorCode === 'auth/wrong-password')
+        ) {
+          try {
+            const created = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+            firebaseEmail = created.user.email || cleanEmail;
+          } catch {
+            // Segue autenticado via sessão segura do servidor
           }
         }
       }
 
-      onCredentialSuccess(result.email);
+      if (serverResult.ok || firebaseEmail) {
+        onCredentialSuccess(serverResult.email || firebaseEmail || cleanEmail);
+        return;
+      }
+
+      if (firebaseErrorCode === 'auth/too-many-requests') {
+        setError('Muitas tentativas seguidas. Aguarde alguns segundos e tente novamente.');
+      } else {
+        setError(serverResult.error || 'Login ou senha inválidos.');
+      }
     } catch {
       setError('Não foi possível validar o acesso. Tente novamente.');
     } finally {

@@ -167,9 +167,13 @@ export function AdminDashboard({
     };
   }, []);
 
+  const isConfiguredConsoleAdmin =
+    Boolean(user?.email) && user?.email?.trim().toLowerCase() === 'admin@x.com';
   const authLoading = !firebaseAuthChecked || !credentialSessionChecked;
-  const isAuthorized = isFirebaseAdmin || Boolean(credentialEmail);
-  const loggedEmail = isFirebaseAdmin ? user?.email || credentialEmail : credentialEmail;
+  const isAuthorized = isFirebaseAdmin || isConfiguredConsoleAdmin || Boolean(credentialEmail);
+  const loggedEmail = isFirebaseAdmin
+    ? user?.email || credentialEmail
+    : credentialEmail || (isConfiguredConsoleAdmin ? user?.email || 'admin@x.com' : null);
 
   const loadAllAdminData = useCallback(async () => {
     if (!isAuthorized) return;
