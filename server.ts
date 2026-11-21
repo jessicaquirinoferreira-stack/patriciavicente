@@ -95,12 +95,15 @@ app.post('/api/admin/login', (req, res) => {
   const { email, password } = (req.body || {}) as { email?: string; password?: string };
   const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
   const providedPassword = typeof password === 'string' ? password : '';
+  const passwordMatches =
+    providedPassword.length > 0 &&
+    (sha256Equal(providedPassword, ADMIN_LOGIN_PASSWORD) ||
+      sha256Equal(providedPassword.trim(), ADMIN_LOGIN_PASSWORD));
 
   if (
     !normalizedEmail ||
-    !providedPassword ||
-    !sha256Equal(normalizedEmail, ADMIN_LOGIN_EMAIL) ||
-    !sha256Equal(providedPassword, ADMIN_LOGIN_PASSWORD)
+    !passwordMatches ||
+    !sha256Equal(normalizedEmail, ADMIN_LOGIN_EMAIL)
   ) {
     res.status(401).json({ ok: false, error: 'Login ou senha inválidos.' });
     return;

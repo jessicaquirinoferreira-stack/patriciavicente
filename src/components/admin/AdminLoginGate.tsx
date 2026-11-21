@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ArrowLeft, Copy, Eye, EyeOff, Lock, LogOut, ShieldCheck } from 'lucide-react';
 import {
+  createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
@@ -34,7 +35,7 @@ export function AdminLoginGate({
 
   const handleCredentialLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanEmail = email.trim();
+    const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !password) {
       setError('Informe seu login e senha para entrar.');
       return;
@@ -49,11 +50,25 @@ export function AdminLoginGate({
         return;
       }
 
-      // Tentativa silenciosa opcional no Firebase Auth caso Email/Senha esteja habilitado no Console
+      // Sincroniza e auto-cadastra no Firebase Auth se o provedor E-mail/Senha estiver ativo no Console
       try {
         await signInWithEmailAndPassword(auth, cleanEmail, password);
-      } catch {
-        // Sessão administrativa autenticada via credencial segura no servidor
+      } catch (fbErr: unknown) {
+        const code =
+          typeof fbErr === 'object' && fbErr !== null && 'code' in fbErr
+            ? String((fbErr as { code?: unknown }).code)
+            : '';
+        if (
+          code === 'auth/user-not-found' ||
+          code === 'auth/invalid-credential' ||
+          code === 'auth/wrong-password'
+        ) {
+          try {
+            await createUserWithEmailAndPassword(auth, cleanEmail, password);
+          } catch {
+            // Se o provedor Email/Senha ainda não estiver ativo no Firebase Console, mantém acesso via sessão segura
+          }
+        }
       }
 
       onCredentialSuccess(result.email);
@@ -85,64 +100,6 @@ export function AdminLoginGate({
       <div className="min-h-screen bg-[#FAF9F6] flex items-center justify-center p-6">
         <div className="bg-white border border-[#E6E2DA] rounded-2xl px-8 py-6 text-sm text-[#52525B]">
           Verificando sessão administrativa...
-        </div>
-      </div>
-    );
-  }
-
-  if (user && !isAdmin) {
-    return (
-      <div className="min-h-screen bg-[#FAF9F6] flex items-center justify-center p-6">
-        <div className="max-w-lg w-full bg-white border border-[#E6E2DA] rounded-2xl p-8 space-y-5">
-          <div className="inline-flex items-center justify-center w-11 h-11 rounded-full bg-[#FEF3C7] text-[#92400E]">
-            <Lock className="w-5 h-5" />
-          </div>
-          <div className="space-y-2">
-            <h1 className="font-display text-2xl font-semibold text-[#18181B]">
-              Acesso administrativo pendente de autorização
-            </h1>
-            <p className="text-sm text-[#52525B] leading-relaxed">
-              Você está autenticado como <strong>{user.email}</strong>, porém este usuário ainda
-              não foi incluído na coleção de administradores autorizados.
-            </p>
-          </div>
-
-          <div className="bg-[#FAF9F6] border border-[#E6E2DA] rounded-xl p-4 space-y-2 text-xs">
-            <p className="text-[#71717A]">Seu UID do Firebase Authentication:</p>
-            <div className="flex items-center justify-between gap-2">
-              <code className="font-mono-tabular text-[#18181B] break-all">{user.uid}</code>
-              <button
-                type="button"
-                onClick={async () => {
-                  await navigator.clipboard.writeText(user.uid);
-                  setCopiedUid(true);
-                  setTimeout(() => setCopiedUid(false), 2000);
-                }}
-                className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-[#E6E2DA] rounded-lg text-[#18181B] shrink-0 cursor-pointer"
-              >
-                <Copy className="w-3 h-3" />
-                <span>{copiedUid ? 'Copiado' : 'Copiar'}</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => signOut(auth)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-[#1E4D5C] rounded-xl cursor-pointer"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>Trocar conta Google</span>
-            </button>
-            <button
-              type="button"
-              onClick={onBackToSite}
-              className="px-4 py-2.5 text-xs font-medium text-[#52525B] hover:text-[#18181B] cursor-pointer"
-            >
-              Voltar ao site público
-            </button>
-          </div>
         </div>
       </div>
     );
@@ -187,6 +144,9 @@ export function AdminLoginGate({
               type="email"
               name="email"
               autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -202,6 +162,9 @@ export function AdminLoginGate({
                 type={showPassword ? 'text' : 'password'}
                 name="password"
                 autoComplete="current-password"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -242,7 +205,45 @@ export function AdminLoginGate({
         >
           {googleSigningIn ? 'Autenticando com Google...' : 'Entrar com conta Google autorizada'}
         </button>
+
+        {user && !isAdmin ? (
+          <div className="bg-[#FAF9F6] border border-[#E6E2DA] rounded-xl p-4 space-y-2.5 text-xs">
+            <div className="flex items-start gap-2 text-[#92400E]">
+              <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+              <p className="text-[#52525B] leading-relaxed">
+                Sessão Google conectada: <strong className="text-[#18181B]">{user.email}</strong>{' '}
+                (sem permissão Firebase Admin ainda). Use o login acima ou troque a conta Google.
+              </p>
+            </div>
+            <div className="flex items-center justify-between gap-2 bg-white border border-[#E6E2DA] rounded-lg px-2.5 py-1.5">
+              <code className="font-mono-tabular text-[11px] text-[#18181B] truncate">
+                UID: {user.uid}
+              </code>
+              <button
+                type="button"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(user.uid);
+                  setCopiedUid(true);
+                  setTimeout(() => setCopiedUid(false), 2000);
+                }}
+                className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#FAF9F6] border border-[#E6E2DA] rounded text-[11px] text-[#18181B] shrink-0 cursor-pointer"
+              >
+                <Copy className="w-3 h-3" />
+                <span>{copiedUid ? 'Copiado' : 'Copiar UID'}</span>
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => signOut(auth)}
+              className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[#1E4D5C] hover:underline cursor-pointer"
+            >
+              <LogOut className="w-3 h-3" />
+              <span>Desconectar esta conta Firebase</span>
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
 }
+

@@ -183,7 +183,10 @@ function makeId(prefix: string): string {
 
 export function getStoredAdminToken(): string | null {
   try {
-    return window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
+    return (
+      window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) ||
+      window.localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)
+    );
   } catch {
     return null;
   }
@@ -193,11 +196,23 @@ export function setStoredAdminToken(token: string | null): void {
   try {
     if (token) {
       window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+      window.localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
     } else {
       window.sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+      window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
     }
   } catch {
     // Ignore storage errors
+  }
+}
+
+async function safeParseJson<T>(res: Response): Promise<T | null> {
+  try {
+    const text = await res.text();
+    if (!text) return null;
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
   }
 }
 
@@ -210,8 +225,8 @@ export async function checkCredentialSession(): Promise<{ authenticated: boolean
       headers: token ? { Authorization: `Bearer ${token}` } : undefined
     });
     if (!res.ok) return { authenticated: false };
-    const json = (await res.json()) as { authenticated?: boolean; email?: string };
-    return { authenticated: Boolean(json.authenticated), email: json.email };
+    const json = await safeParseJson<{ authenticated?: boolean; email?: string }>(res);
+    return { authenticated: Boolean(json?.authenticated), email: json?.email };
   } catch {
     return { authenticated: false };
   }
@@ -226,16 +241,16 @@ export async function loginWithCredentials(
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email: email.trim().toLowerCase(), password })
     });
-    const json = (await res.json()) as {
+    const json = await safeParseJson<{
       ok?: boolean;
       email?: string;
       sessionToken?: string;
       error?: string;
-    };
-    if (!res.ok || !json.ok) {
-      return { ok: false, error: json.error || 'Login ou senha inválidos.' };
+    }>(res);
+    if (!res.ok || !json?.ok) {
+      return { ok: false, error: json?.error || 'Login ou senha inválidos.' };
     }
     if (json.sessionToken) {
       setStoredAdminToken(json.sessionToken);
