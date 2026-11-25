@@ -93,9 +93,25 @@ function uploadViaStreamWithProgress(
             storageProvider: parsed.storageProvider || 'local_asset'
           });
         } else {
+          if (xhr.status === 413) {
+            reject(
+              new Error(
+                'O arquivo excedeu o limite do servidor (4,5 MB). Verifique a configuração do Vercel Blob.'
+              )
+            );
+            return;
+          }
           reject(new Error(parsed.error || `Falha no envio (HTTP ${xhr.status}).`));
         }
       } catch {
+        if (xhr.status === 413) {
+          reject(
+            new Error(
+              'O arquivo excedeu o limite do servidor (4,5 MB). Verifique a configuração do Vercel Blob.'
+            )
+          );
+          return;
+        }
         reject(new Error(`Resposta inválida do servidor (HTTP ${xhr.status}).`));
       }
     };
@@ -109,15 +125,18 @@ let cachedBlobHealth: { configured: boolean; checkedAt: number } | null = null;
 
 async function isVercelBlobConfigured(): Promise<boolean> {
   const now = Date.now();
-  if (cachedBlobHealth && now - cachedBlobHealth.checkedAt < 60_000) {
-    return cachedBlobHealth.configured;
+  if (cachedBlobHealth && cachedBlobHealth.configured && now - cachedBlobHealth.checkedAt < 60_000) {
+    return true;
   }
   try {
-    const res = await fetch('/api/health');
+    const res = await fetch('/api/health', { cache: 'no-store' });
     if (!res.ok) return false;
     const data = (await res.json()) as { blobConfigured?: boolean };
-    cachedBlobHealth = { configured: Boolean(data.blobConfigured), checkedAt: now };
-    return cachedBlobHealth.configured;
+    const configured = Boolean(data.blobConfigured);
+    if (configured) {
+      cachedBlobHealth = { configured: true, checkedAt: now };
+    }
+    return configured;
   } catch {
     return false;
   }
@@ -214,8 +233,8 @@ export async function uploadMediaWithCompression(
       finalContentType = blob.contentType || finalContentType;
       storageProvider = 'vercel_blob';
       options?.onStageChange?.('uploading', 100, 'Enviado para Vercel Blob!');
-    } catch {
-      // Fallback automático via stream no servidor Express -> Vercel Blob put(multipart: true)
+    } catch (clientErr) {
+      console.warn('Upload direto ao Vercel Blob falhou, tentando via stream:', clientErr);
     }
   }
 

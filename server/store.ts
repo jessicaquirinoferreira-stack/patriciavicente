@@ -1,6 +1,9 @@
+import crypto from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { get as blobGet, put as blobPut } from '@vercel/blob';
 import type {
   AdminUser,
   AnalyticsEvent,
@@ -21,8 +24,25 @@ import type {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.resolve(__dirname, '..', '.data');
+const IS_VERCEL = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
+
+function resolveDataDir(): string {
+  if (IS_VERCEL) {
+    return path.join(os.tmpdir(), 'pv-data');
+  }
+  const localDir = path.resolve(__dirname, '..', '.data');
+  try {
+    fs.mkdirSync(localDir, { recursive: true });
+    return localDir;
+  } catch {
+    return path.join(os.tmpdir(), 'pv-data');
+  }
+}
+
+const DATA_DIR = resolveDataDir();
 const DB_FILE_PATH = path.join(DATA_DIR, 'pv-database.json');
+const REMOTE_BLOB_PATH = 'pv-system/pv-database-v1.enc';
+const ENVELOPE_MAGIC = Buffer.from('PVDB1', 'ascii');
 
 export interface PersistentDatabase {
   version: number;
@@ -381,37 +401,162 @@ function normalizeDatabase(raw: Partial<PersistentDatabase> | null | undefined):
 }
 
 let cachedDb: PersistentDatabase | null = null;
+let lastRemoteSyncAt = 0;
+let inFlightRemoteLoad: Promise<PersistentDatabase> | null = null;
 let writeQueue: Promise<unknown> = Promise.resolve();
+let derivedVaultKeyCache: { source: string; key: Buffer } | null = null;
+
+function getBlobToken(): string {
+  return (process.env.BLOB_READ_WRITE_TOKEN || '').trim().replace(/^["']+|["']+$/g, '');
+}
+
+function getVaultEncryptionKey(token: string): Buffer {
+  const secretSource = `${token}:${process.env.ADMIN_SESSION_SECRET || 'pv-corretora-blob-vault-v1'}`;
+  if (derivedVaultKeyCache && derivedVaultKeyCache.source === secretSource) {
+    return derivedVaultKeyCache.key;
+  }
+  const key = crypto.scryptSync(secretSource, 'pv-blob-vault-salt-2026', 32);
+  derivedVaultKeyCache = { source: secretSource, key };
+  return key;
+}
+
+function encryptDatabasePayload(db: PersistentDatabase, token: string): Buffer {
+  const key = getVaultEncryptionKey(token);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const plaintext = Buffer.from(JSON.stringify(db), 'utf8');
+  const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return Buffer.concat([ENVELOPE_MAGIC, iv, authTag, encrypted]);
+}
+
+function decryptDatabasePayload(payload: Buffer, token: string): PersistentDatabase | null {
+  if (payload.length < ENVELOPE_MAGIC.length + 12 + 16) return null;
+  if (!payload.subarray(0, ENVELOPE_MAGIC.length).equals(ENVELOPE_MAGIC)) return null;
+  const ivStart = ENVELOPE_MAGIC.length;
+  const tagStart = ivStart + 12;
+  const dataStart = tagStart + 16;
+  const iv = payload.subarray(ivStart, tagStart);
+  const authTag = payload.subarray(tagStart, dataStart);
+  const ciphertext = payload.subarray(dataStart);
+  const key = getVaultEncryptionKey(token);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
+  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+  return normalizeDatabase(JSON.parse(decrypted) as Partial<PersistentDatabase>);
+}
+
+async function readStreamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
 
 function loadDatabaseFromDisk(): PersistentDatabase {
   if (cachedDb) return cachedDb;
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (fs.existsSync(DB_FILE_PATH)) {
-    try {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (fs.existsSync(DB_FILE_PATH)) {
       const content = fs.readFileSync(DB_FILE_PATH, 'utf8');
       const parsed = JSON.parse(content) as Partial<PersistentDatabase>;
       cachedDb = normalizeDatabase(parsed);
       return cachedDb;
-    } catch {
-      // Backup corrupt file if needed and re-initialize cleanly
     }
+  } catch {
+    // Ignore local disk read errors and initialize cleanly
   }
   const initial = createSeedDatabase();
-  persistDatabaseSync(initial);
+  persistDatabaseLocalSync(initial);
   cachedDb = initial;
   return cachedDb;
 }
 
-function persistDatabaseSync(nextDb: PersistentDatabase): void {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const tmpPath = `${DB_FILE_PATH}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(nextDb, null, 2), 'utf8');
-  fs.renameSync(tmpPath, DB_FILE_PATH);
+function persistDatabaseLocalSync(nextDb: PersistentDatabase): void {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tmpPath = `${DB_FILE_PATH}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(nextDb, null, 2), 'utf8');
+    fs.renameSync(tmpPath, DB_FILE_PATH);
+  } catch {
+    // Ignore local cache write errors on constrained environments
+  }
   cachedDb = nextDb;
+}
+
+async function persistDatabaseRemote(nextDb: PersistentDatabase): Promise<void> {
+  const token = getBlobToken();
+  if (!token) return;
+  const encrypted = encryptDatabasePayload(nextDb, token);
+  await blobPut(REMOTE_BLOB_PATH, encrypted, {
+    access: 'public',
+    allowOverwrite: true,
+    addRandomSuffix: false,
+    cacheControlMaxAge: 60,
+    contentType: 'application/octet-stream',
+    token
+  });
+  lastRemoteSyncAt = Date.now();
+}
+
+async function syncFromRemoteBlob(force = false): Promise<PersistentDatabase> {
+  const local = loadDatabaseFromDisk();
+  const token = getBlobToken();
+  if (!token) return local;
+
+  const ttlMs = IS_VERCEL ? 1500 : 30_000;
+  if (!force && lastRemoteSyncAt > 0 && Date.now() - lastRemoteSyncAt < ttlMs) {
+    return local;
+  }
+
+  if (inFlightRemoteLoad) {
+    return inFlightRemoteLoad;
+  }
+
+  inFlightRemoteLoad = (async () => {
+    try {
+      const result = await blobGet(REMOTE_BLOB_PATH, {
+        access: 'public',
+        useCache: false,
+        token
+      });
+      if (result?.stream) {
+        const rawBuf = await readStreamToBuffer(result.stream);
+        const remoteDb = decryptDatabasePayload(rawBuf, token);
+        if (remoteDb) {
+          const remoteTs = Date.parse(remoteDb.updatedAt || '') || 0;
+          const localTs = Date.parse(local.updatedAt || '') || 0;
+          if (!local.hasAdminEdits || remoteDb.hasAdminEdits || remoteTs >= localTs) {
+            persistDatabaseLocalSync(remoteDb);
+            lastRemoteSyncAt = Date.now();
+            return remoteDb;
+          }
+        }
+      } else if (local.hasAdminEdits) {
+        await persistDatabaseRemote(local);
+      }
+      lastRemoteSyncAt = Date.now();
+      return cachedDb || local;
+    } catch {
+      return cachedDb || local;
+    } finally {
+      inFlightRemoteLoad = null;
+    }
+  })();
+
+  return inFlightRemoteLoad;
 }
 
 export function getFullDatabase(): PersistentDatabase {
   return loadDatabaseFromDisk();
+}
+
+export async function getFullDatabaseAsync(): Promise<PersistentDatabase> {
+  return syncFromRemoteBlob(false);
 }
 
 export function getPublicSnapshot(): PublicSiteSnapshot {
@@ -428,12 +573,34 @@ export function getPublicSnapshot(): PublicSiteSnapshot {
   };
 }
 
-function mutateDb<T>(mutator: (db: PersistentDatabase) => T): Promise<T> {
-  const task = writeQueue.then(() => {
-    const current = loadDatabaseFromDisk();
+export async function getPublicSnapshotAsync(): Promise<PublicSiteSnapshot> {
+  const db = await syncFromRemoteBlob(false);
+  const publishedLanding = db.landingPages.filter((lp) => lp.published);
+  return {
+    hasAdminEdits: db.hasAdminEdits,
+    updatedAt: db.updatedAt,
+    siteSettings: db.siteSettings,
+    professionalProfile: db.professionalProfile,
+    properties: db.properties.filter((p) => p.published),
+    empreendimentos: db.empreendimentos.filter((e) => e.published),
+    landingPages: publishedLanding.length > 0 ? publishedLanding : [{ ...DEFAULT_LANDING_PAGE }]
+  };
+}
+
+function mutateDb<T>(
+  mutator: (db: PersistentDatabase) => T,
+  options?: { skipRemoteSync?: boolean }
+): Promise<T> {
+  const task = writeQueue.then(async () => {
+    const current = options?.skipRemoteSync
+      ? loadDatabaseFromDisk()
+      : await syncFromRemoteBlob(IS_VERCEL);
     const result = mutator(current);
     current.updatedAt = new Date().toISOString();
-    persistDatabaseSync(current);
+    persistDatabaseLocalSync(current);
+    if (!options?.skipRemoteSync) {
+      await persistDatabaseRemote(current);
+    }
     return result;
   });
   writeQueue = task.catch(() => undefined);

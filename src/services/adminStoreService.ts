@@ -222,8 +222,12 @@ async function adminApiFetch<T>(url: string, init: RequestInit = {}): Promise<T>
 
   const json = await safeParseJson<T & { error?: string }>(res);
   if (!res.ok) {
+    const isRead = !init.method || init.method.toUpperCase() === 'GET';
     throw new Error(
-      json?.error || `Falha ao salvar no banco de dados (HTTP ${res.status}).`
+      json?.error ||
+        (isRead
+          ? `Falha ao carregar dados do servidor (HTTP ${res.status}).`
+          : `Falha ao salvar no banco de dados (HTTP ${res.status}).`)
     );
   }
   return (json || ({} as T)) as T;
