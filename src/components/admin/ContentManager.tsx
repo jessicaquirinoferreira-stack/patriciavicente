@@ -109,6 +109,7 @@ export function ContentManager({
   const [mediaStatusMsg, setMediaStatusMsg] = useState('');
 
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [saveNotice, setSaveNotice] = useState('');
   const [errorNotice, setErrorNotice] = useState('');
 
@@ -684,7 +685,7 @@ export function ContentManager({
         <div className="lg:col-span-7 bg-white border border-[#E6E2DA] rounded-2xl divide-y divide-[#E6E2DA]">
           {properties.length === 0 ? (
             <div className="p-8 text-center text-sm text-[#71717A]">
-              Nenhum imóvel salvo no Firestore ainda.
+              Nenhum imóvel cadastrado ainda.
             </div>
           ) : (
             properties.map((p) => (
@@ -722,12 +723,28 @@ export function ContentManager({
                   </button>
                   <button
                     type="button"
+                    disabled={deletingId === p.id}
                     onClick={async () => {
-                      await removeProperty(p.id);
-                      await onRefresh();
+                      setDeletingId(p.id);
+                      setSaveNotice('');
+                      setErrorNotice('');
+                      try {
+                        await removeProperty(p.id);
+                        if (editingPropId === p.id) {
+                          resetPropForm();
+                        }
+                        await onRefresh();
+                        setSaveNotice('Imóvel excluído permanentemente do banco de dados e do site.');
+                      } catch (err) {
+                        setErrorNotice(
+                          err instanceof Error ? err.message : 'Não foi possível excluir o imóvel.'
+                        );
+                      } finally {
+                        setDeletingId(null);
+                      }
                     }}
-                    className="p-1.5 text-[#A1A1AA] hover:text-[#DC2626] cursor-pointer"
-                    title="Excluir"
+                    className="p-1.5 text-[#A1A1AA] hover:text-[#DC2626] disabled:opacity-40 cursor-pointer"
+                    title="Excluir imóvel"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -930,7 +947,7 @@ export function ContentManager({
         <div className="lg:col-span-7 bg-white border border-[#E6E2DA] rounded-2xl divide-y divide-[#E6E2DA]">
           {empreendimentos.length === 0 ? (
             <div className="p-8 text-center text-sm text-[#71717A]">
-              Nenhum empreendimento cadastrado no Firestore.
+              Nenhum empreendimento cadastrado ainda.
             </div>
           ) : (
             empreendimentos.map((emp) => (
@@ -964,11 +981,30 @@ export function ContentManager({
                   </button>
                   <button
                     type="button"
+                    disabled={deletingId === emp.id}
                     onClick={async () => {
-                      await removeEmpreendimento(emp.id);
-                      await onRefresh();
+                      setDeletingId(emp.id);
+                      setSaveNotice('');
+                      setErrorNotice('');
+                      try {
+                        await removeEmpreendimento(emp.id);
+                        if (editingEmpId === emp.id) {
+                          resetEmpForm();
+                        }
+                        await onRefresh();
+                        setSaveNotice('Empreendimento excluído permanentemente do banco de dados e do site.');
+                      } catch (err) {
+                        setErrorNotice(
+                          err instanceof Error
+                            ? err.message
+                            : 'Não foi possível excluir o empreendimento.'
+                        );
+                      } finally {
+                        setDeletingId(null);
+                      }
                     }}
-                    className="p-1.5 text-[#A1A1AA] hover:text-[#DC2626] cursor-pointer"
+                    className="p-1.5 text-[#A1A1AA] hover:text-[#DC2626] disabled:opacity-40 cursor-pointer"
+                    title="Excluir empreendimento"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -1194,11 +1230,30 @@ export function ContentManager({
                   </button>
                   <button
                     type="button"
+                    disabled={deletingId === lp.id}
                     onClick={async () => {
-                      await removeLandingPage(lp.id);
-                      await onRefresh();
+                      setDeletingId(lp.id);
+                      setSaveNotice('');
+                      setErrorNotice('');
+                      try {
+                        await removeLandingPage(lp.id);
+                        if (editingLpId === lp.id) {
+                          resetLpForm();
+                        }
+                        await onRefresh();
+                        setSaveNotice('Landing page excluída permanentemente.');
+                      } catch (err) {
+                        setErrorNotice(
+                          err instanceof Error
+                            ? err.message
+                            : 'Não foi possível excluir a landing page.'
+                        );
+                      } finally {
+                        setDeletingId(null);
+                      }
                     }}
-                    className="p-1.5 text-[#A1A1AA] hover:text-[#DC2626] cursor-pointer"
+                    className="p-1.5 text-[#A1A1AA] hover:text-[#DC2626] disabled:opacity-40 cursor-pointer"
+                    title="Excluir landing page"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -1309,13 +1364,24 @@ export function ContentManager({
                   </button>
                   <button
                     type="button"
+                    disabled={deletingId === item.id}
                     onClick={async () => {
-                      await removeMediaAsset(item.id);
-                      await onRefresh();
+                      setDeletingId(item.id);
+                      try {
+                        await removeMediaAsset(item.id);
+                        await onRefresh();
+                        setMediaStatusMsg('Arquivo removido da biblioteca.');
+                      } catch (err) {
+                        setMediaStatusMsg(
+                          err instanceof Error ? err.message : 'Não foi possível excluir o arquivo.'
+                        );
+                      } finally {
+                        setDeletingId(null);
+                      }
                     }}
-                    className="text-[#A1A1AA] hover:text-[#DC2626] cursor-pointer"
+                    className="text-[#A1A1AA] hover:text-[#DC2626] disabled:opacity-40 cursor-pointer"
                   >
-                    Excluir
+                    {deletingId === item.id ? 'Excluindo...' : 'Excluir'}
                   </button>
                 </div>
               </div>

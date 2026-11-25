@@ -303,7 +303,10 @@ export async function isCloudFirebaseAdminActive(): Promise<boolean> {
 
 export async function getPublicSnapshotUnified(): Promise<PublicSiteSnapshot> {
   try {
-    const res = await fetch('/api/public/data', { cache: 'no-store' });
+    const res = await fetch('/api/public/data', {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' }
+    });
     if (res.ok) {
       const serverData = await safeParseJson<PublicSiteSnapshot>(res);
       if (serverData && serverData.siteSettings && serverData.professionalProfile) {
@@ -478,6 +481,18 @@ export async function adminFetchFullStore(): Promise<FullAdminStoreData> {
     } catch {
       // Keep server store as authoritative fallback
     }
+  }
+
+  if (serverStore.hasAdminEdits) {
+    writeCachedPublicSnapshot({
+      hasAdminEdits: true,
+      updatedAt: serverStore.updatedAt,
+      siteSettings: serverStore.siteSettings,
+      professionalProfile: serverStore.professionalProfile,
+      properties: serverStore.properties.filter((p) => p.published),
+      empreendimentos: serverStore.empreendimentos.filter((e) => e.published),
+      landingPages: serverStore.landingPages.filter((l) => l.published)
+    });
   }
 
   return serverStore;

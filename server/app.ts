@@ -426,7 +426,9 @@ export function createExpressApp() {
 
   app.get('/api/public/data', async (_req, res) => {
     try {
-      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.json(await getPublicSnapshotAsync());
     } catch (err) {
       res.status(500).json({
@@ -508,7 +510,9 @@ export function createExpressApp() {
   app.get('/api/admin/store', async (req, res) => {
     try {
       if (!(await requireAdmin(req, res))) return;
-      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.json(await getFullDatabaseAsync());
     } catch (err) {
       res.status(500).json({

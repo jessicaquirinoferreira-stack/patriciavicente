@@ -3,7 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { get as blobGet, put as blobPut } from '@vercel/blob';
+import { del as blobDel, get as blobGet, list as blobList, put as blobPut } from '@vercel/blob';
 import type {
   AdminUser,
   AnalyticsEvent,
@@ -41,7 +41,8 @@ function resolveDataDir(): string {
 
 const DATA_DIR = resolveDataDir();
 const DB_FILE_PATH = path.join(DATA_DIR, 'pv-database.json');
-const REMOTE_BLOB_PATH = 'pv-system/pv-database-v1.enc';
+const REMOTE_DB_PREFIX = 'pv-system/db/';
+const LEGACY_REMOTE_BLOB_PATH = 'pv-system/pv-database-v1.enc';
 const ENVELOPE_MAGIC = Buffer.from('PVDB1', 'ascii');
 
 export interface PersistentDatabase {
@@ -402,6 +403,7 @@ function normalizeDatabase(raw: Partial<PersistentDatabase> | null | undefined):
 
 let cachedDb: PersistentDatabase | null = null;
 let lastRemoteSyncAt = 0;
+let lastRemoteBlobUrl: string | null = null;
 let inFlightRemoteLoad: Promise<PersistentDatabase> | null = null;
 let writeQueue: Promise<unknown> = Promise.resolve();
 let derivedVaultKeyCache: { source: string; key: Buffer } | null = null;
@@ -488,28 +490,58 @@ function persistDatabaseLocalSync(nextDb: PersistentDatabase): void {
   cachedDb = nextDb;
 }
 
+let writeSeq = 0;
+
+function makeVersionedBlobPath(): string {
+  writeSeq = (writeSeq + 1) % 10000;
+  const ts = String(Date.now()).padStart(15, '0');
+  const seq = String(writeSeq).padStart(4, '0');
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `${REMOTE_DB_PREFIX}v-${ts}-${seq}-${rand}.enc`;
+}
+
+async function pruneOldRemoteSnapshots(token: string, keepUrl: string): Promise<void> {
+  try {
+    const listed = await blobList({ prefix: REMOTE_DB_PREFIX, limit: 100, token });
+    const sorted = [...listed.blobs].sort((a, b) => b.pathname.localeCompare(a.pathname));
+    const toDelete = sorted.filter((b, idx) => idx >= 2 && b.url !== keepUrl).map((b) => b.url);
+    if (toDelete.length > 0) {
+      await blobDel(toDelete, { token });
+    }
+  } catch {
+    // Best-effort cleanup of superseded snapshots
+  }
+}
+
 async function persistDatabaseRemote(nextDb: PersistentDatabase): Promise<void> {
   const token = getBlobToken();
   if (!token) return;
   const encrypted = encryptDatabasePayload(nextDb, token);
-  await blobPut(REMOTE_BLOB_PATH, encrypted, {
+  const blob = await blobPut(makeVersionedBlobPath(), encrypted, {
     access: 'public',
-    allowOverwrite: true,
+    allowOverwrite: false,
     addRandomSuffix: false,
     cacheControlMaxAge: 60,
     contentType: 'application/octet-stream',
     token
   });
+  lastRemoteBlobUrl = blob.url;
   lastRemoteSyncAt = Date.now();
+  await pruneOldRemoteSnapshots(token, blob.url);
 }
 
-async function syncFromRemoteBlob(force = false): Promise<PersistentDatabase> {
+async function fetchEncryptedBlobBuffer(url: string): Promise<Buffer | null> {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) return null;
+  return Buffer.from(await res.arrayBuffer());
+}
+
+async function syncFromRemoteBlob(force = true): Promise<PersistentDatabase> {
   const local = loadDatabaseFromDisk();
   const token = getBlobToken();
   if (!token) return local;
 
-  const ttlMs = IS_VERCEL ? 1500 : 30_000;
-  if (!force && lastRemoteSyncAt > 0 && Date.now() - lastRemoteSyncAt < ttlMs) {
+  if (!force && lastRemoteSyncAt > 0 && Date.now() - lastRemoteSyncAt < 250) {
     return local;
   }
 
@@ -519,19 +551,38 @@ async function syncFromRemoteBlob(force = false): Promise<PersistentDatabase> {
 
   inFlightRemoteLoad = (async () => {
     try {
-      const result = await blobGet(REMOTE_BLOB_PATH, {
-        access: 'public',
-        useCache: false,
-        token
-      });
-      if (result?.stream) {
-        const rawBuf = await readStreamToBuffer(result.stream);
+      const listed = await blobList({ prefix: REMOTE_DB_PREFIX, limit: 100, token });
+      let rawBuf: Buffer | null = null;
+      let latestRemoteUrl: string | null = null;
+
+      if (listed.blobs.length > 0) {
+        const sorted = [...listed.blobs].sort((a, b) => b.pathname.localeCompare(a.pathname));
+        latestRemoteUrl = sorted[0].url;
+        rawBuf = await fetchEncryptedBlobBuffer(sorted[0].url);
+      } else {
+        const legacy = await blobGet(LEGACY_REMOTE_BLOB_PATH, {
+          access: 'public',
+          useCache: false,
+          token
+        }).catch(() => null);
+        if (legacy?.stream) {
+          rawBuf = await readStreamToBuffer(legacy.stream);
+        }
+      }
+
+      if (rawBuf) {
         const remoteDb = decryptDatabasePayload(rawBuf, token);
         if (remoteDb) {
           const remoteTs = Date.parse(remoteDb.updatedAt || '') || 0;
           const localTs = Date.parse(local.updatedAt || '') || 0;
-          if (!local.hasAdminEdits || remoteDb.hasAdminEdits || remoteTs >= localTs) {
+          const isNewRemoteSnapshot = Boolean(latestRemoteUrl && latestRemoteUrl !== lastRemoteBlobUrl);
+          if (
+            !local.hasAdminEdits ||
+            remoteTs > localTs ||
+            (remoteDb.hasAdminEdits && (remoteTs >= localTs || isNewRemoteSnapshot))
+          ) {
             persistDatabaseLocalSync(remoteDb);
+            if (latestRemoteUrl) lastRemoteBlobUrl = latestRemoteUrl;
             lastRemoteSyncAt = Date.now();
             return remoteDb;
           }
@@ -556,7 +607,7 @@ export function getFullDatabase(): PersistentDatabase {
 }
 
 export async function getFullDatabaseAsync(): Promise<PersistentDatabase> {
-  return syncFromRemoteBlob(false);
+  return syncFromRemoteBlob(true);
 }
 
 export function getPublicSnapshot(): PublicSiteSnapshot {
@@ -574,7 +625,7 @@ export function getPublicSnapshot(): PublicSiteSnapshot {
 }
 
 export async function getPublicSnapshotAsync(): Promise<PublicSiteSnapshot> {
-  const db = await syncFromRemoteBlob(false);
+  const db = await syncFromRemoteBlob(true);
   const publishedLanding = db.landingPages.filter((lp) => lp.published);
   return {
     hasAdminEdits: db.hasAdminEdits,
@@ -592,15 +643,17 @@ function mutateDb<T>(
   options?: { skipRemoteSync?: boolean }
 ): Promise<T> {
   const task = writeQueue.then(async () => {
-    const current = options?.skipRemoteSync
-      ? loadDatabaseFromDisk()
-      : await syncFromRemoteBlob(IS_VERCEL);
-    const result = mutator(current);
-    current.updatedAt = new Date().toISOString();
-    persistDatabaseLocalSync(current);
-    if (!options?.skipRemoteSync) {
-      await persistDatabaseRemote(current);
+    const current = await syncFromRemoteBlob(true);
+    const next = JSON.parse(JSON.stringify(current)) as PersistentDatabase;
+    const result = mutator(next);
+    const hasRemote = Boolean(getBlobToken());
+    if (!options?.skipRemoteSync || !hasRemote) {
+      next.updatedAt = new Date().toISOString();
     }
+    if (!options?.skipRemoteSync) {
+      await persistDatabaseRemote(next);
+    }
+    persistDatabaseLocalSync(next);
     return result;
   });
   writeQueue = task.catch(() => undefined);
@@ -1048,15 +1101,18 @@ export function dbDeleteAdminUser(uid: string): Promise<void> {
 export function dbRecordAnalytics(
   input: Omit<AnalyticsEvent, 'id' | 'createdAt'>
 ): Promise<void> {
-  return mutateDb((db) => {
-    const evt: AnalyticsEvent = {
-      ...input,
-      id: makeId('evt'),
-      path: input.path || '/',
-      createdAt: new Date().toISOString()
-    };
-    db.analytics = [evt, ...db.analytics].slice(0, 1000);
-  });
+  return mutateDb(
+    (db) => {
+      const evt: AnalyticsEvent = {
+        ...input,
+        id: makeId('evt'),
+        path: input.path || '/',
+        createdAt: new Date().toISOString()
+      };
+      db.analytics = [evt, ...db.analytics].slice(0, 1000);
+    },
+    { skipRemoteSync: input.eventType === 'page_view' }
+  );
 }
 
 export function dbBootstrapDefaults(): Promise<PersistentDatabase> {

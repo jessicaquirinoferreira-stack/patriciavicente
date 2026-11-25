@@ -112,6 +112,10 @@ export async function listPublishedProperties(): Promise<Property[]> {
     const q = query(collection(db, path), where('published', '==', true));
     const snap = await getDocs(q);
     if (snap.empty) {
+      const settingsSnap = await getDoc(doc(db, 'siteSettings', 'main')).catch(() => null);
+      if (settingsSnap && settingsSnap.exists()) {
+        return [];
+      }
       return DEFAULT_PROPERTIES;
     }
     return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Property, 'id'>) }));
@@ -126,6 +130,10 @@ export async function listPublishedEmpreendimentos(): Promise<Empreendimento[]> 
     const q = query(collection(db, path), where('published', '==', true));
     const snap = await getDocs(q);
     if (snap.empty) {
+      const settingsSnap = await getDoc(doc(db, 'siteSettings', 'main')).catch(() => null);
+      if (settingsSnap && settingsSnap.exists()) {
+        return [];
+      }
       return DEFAULT_EMPREENDIMENTOS;
     }
     return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Empreendimento, 'id'>) }));
@@ -439,7 +447,7 @@ export async function saveProperty(property: Omit<Property, 'id'> & { id?: strin
     const baseData = stripEmpty({
       code: clampStr(property.code || 'PV-NEW', 32),
       title: clampStr(property.title, 160),
-      slug: slugifyText(property.slug || property.title),
+      slug: slugifyText(property.slug || property.title) || clampStr(property.id || 'imovel', 32),
       category: property.category,
       transactionType: property.transactionType || 'venda',
       region: clampStr(property.region || 'Sorocaba e região', 120),
@@ -505,7 +513,7 @@ export async function saveEmpreendimento(
   try {
     const baseData = stripEmpty({
       name: clampStr(emp.name, 160),
-      slug: slugifyText(emp.slug || emp.name),
+      slug: slugifyText(emp.slug || emp.name) || clampStr(emp.id || 'empreendimento', 32),
       category: emp.category,
       region: clampStr(emp.region || 'Sorocaba e região', 120),
       developer: emp.developer ? clampStr(emp.developer, 120) : undefined,
