@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import {
   PIPELINE_STAGES,
@@ -170,17 +170,31 @@ export function SettingsManager({
   const [newAdminEmail, setNewAdminEmail] = useState('');
   const [newAdminName, setNewAdminName] = useState('');
   const [savedNotice, setSavedNotice] = useState('');
+  const [errorNotice, setErrorNotice] = useState('');
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setSiteForm(settings);
+  }, [settings]);
+
+  useEffect(() => {
+    setProfForm(profile);
+  }, [profile]);
 
   const handleSaveSite = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     setSavedNotice('');
+    setErrorNotice('');
     try {
       await saveSiteSettings(siteForm);
       await saveProfessionalProfile(profForm);
       await onRefresh();
-      setSavedNotice('Configurações do site, perfil e integrações salvas com sucesso.');
+      setSavedNotice('Configurações do site, perfil e integrações salvas permanentemente no banco de dados e no site.');
+    } catch (err) {
+      setErrorNotice(
+        err instanceof Error ? err.message : 'Erro ao salvar configurações no banco de dados.'
+      );
     } finally {
       setSaving(false);
     }
@@ -189,16 +203,23 @@ export function SettingsManager({
   const handleAddAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newAdminUid.trim() || !newAdminEmail.trim()) return;
-    await saveAdminUser(newAdminUid.trim(), {
-      email: newAdminEmail.trim(),
-      displayName: newAdminName.trim() || undefined,
-      role: 'admin',
-      active: true
-    });
-    setNewAdminUid('');
-    setNewAdminEmail('');
-    setNewAdminName('');
-    await onRefresh();
+    setErrorNotice('');
+    try {
+      await saveAdminUser(newAdminUid.trim(), {
+        email: newAdminEmail.trim(),
+        displayName: newAdminName.trim() || undefined,
+        role: 'admin',
+        active: true
+      });
+      setNewAdminUid('');
+      setNewAdminEmail('');
+      setNewAdminName('');
+      await onRefresh();
+    } catch (err) {
+      setErrorNotice(
+        err instanceof Error ? err.message : 'Erro ao adicionar administrador.'
+      );
+    }
   };
 
   return (
@@ -207,6 +228,11 @@ export function SettingsManager({
         {savedNotice ? (
           <div className="text-xs font-medium text-[#1E4D5C] bg-white border border-[#1E4D5C]/30 rounded-xl px-4 py-3">
             {savedNotice}
+          </div>
+        ) : null}
+        {errorNotice ? (
+          <div className="text-xs font-medium text-[#991B1B] bg-[#FEF2F2] border border-[#FECACA] rounded-xl px-4 py-3">
+            {errorNotice}
           </div>
         ) : null}
 

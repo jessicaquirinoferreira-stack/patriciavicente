@@ -103,6 +103,7 @@ export interface Property {
   confirmationNote?: string;
   coverImage?: string;
   gallery?: string[];
+  videos?: string[];
   features?: string[];
   empreendimentoId?: string;
   featured: boolean;
@@ -126,6 +127,7 @@ export interface Empreendimento {
   highlights?: string[];
   coverImage?: string;
   gallery?: string[];
+  videos?: string[];
   featured: boolean;
   published: boolean;
   createdAt?: unknown;

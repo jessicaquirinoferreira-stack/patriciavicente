@@ -28,8 +28,10 @@ export function EmpreendimentoDetailPage({
   onTrackWhatsApp
 }: EmpreendimentoDetailPageProps) {
   const [copied, setCopied] = useState(false);
+  const [activeImageIdx, setActiveImageIdx] = useState(0);
 
   useEffect(() => {
+    setActiveImageIdx(0);
     if (empreendimento) {
       trackAnalyticsEvent({
         eventType: 'empreendimento_view',
@@ -56,6 +58,12 @@ export function EmpreendimentoDetailPage({
     );
   }
 
+  const gallery =
+    empreendimento.gallery && empreendimento.gallery.length > 0
+      ? empreendimento.gallery
+      : empreendimento.coverImage
+        ? [empreendimento.coverImage]
+        : [];
   const linkedProperties = properties.filter((p) => p.empreendimentoId === empreendimento.id);
   const whatsappHref = buildWhatsAppUrl(
     settings.whatsappNumber,
@@ -99,11 +107,30 @@ export function EmpreendimentoDetailPage({
           <div className="lg:col-span-7 space-y-6">
             <div className="aspect-[16/10] rounded-2xl overflow-hidden bg-[#F3F1EC] border border-[#E6E2DA]">
               <ResilientImage
-                src={empreendimento.coverImage}
+                src={gallery[activeImageIdx] || empreendimento.coverImage}
                 alt={empreendimento.name}
                 fallbackTitle={empreendimento.name}
               />
             </div>
+
+            {gallery.length > 1 && (
+              <div className="grid grid-cols-4 sm:grid-cols-6 gap-3">
+                {gallery.map((imgUrl, idx) => (
+                  <button
+                    key={`${imgUrl}-${idx}`}
+                    type="button"
+                    onClick={() => setActiveImageIdx(idx)}
+                    className={`aspect-[4/3] rounded-xl overflow-hidden border transition-all cursor-pointer ${
+                      activeImageIdx === idx
+                        ? 'border-[#1E4D5C] ring-2 ring-[#1E4D5C]/25'
+                        : 'border-[#E6E2DA] opacity-80 hover:opacity-100'
+                    }`}
+                  >
+                    <ResilientImage src={imgUrl} alt={`${empreendimento.name} - foto ${idx + 1}`} />
+                  </button>
+                ))}
+              </div>
+            )}
 
             <div className="bg-white border border-[#E6E2DA] rounded-2xl p-6 sm:p-8 space-y-6">
               <div className="space-y-3">
@@ -154,6 +181,24 @@ export function EmpreendimentoDetailPage({
                     </li>
                   ))}
                 </ul>
+              )}
+
+              {empreendimento.videos && empreendimento.videos.length > 0 && (
+                <div className="space-y-3 pt-2">
+                  <h2 className="text-base font-semibold text-[#18181B]">Vídeos do empreendimento</h2>
+                  <div className="grid grid-cols-1 gap-4">
+                    {empreendimento.videos.map((videoUrl, idx) => (
+                      <video
+                        key={`${videoUrl}-${idx}`}
+                        src={videoUrl}
+                        controls
+                        playsInline
+                        preload="metadata"
+                        className="w-full max-h-[420px] rounded-xl bg-[#18181B] border border-[#E6E2DA]"
+                      />
+                    ))}
+                  </div>
+                </div>
               )}
 
               <div className="bg-[#FAF9F6] border border-[#E6E2DA] rounded-xl p-4 flex items-start gap-3">

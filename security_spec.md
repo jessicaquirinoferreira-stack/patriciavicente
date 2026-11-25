@@ -20,4 +20,4 @@
 9. **Timestamp Forgery**: Criar lead ou analytics com `createdAt` retroativo (cliente tentando falsificar `request.time`) -> Bloqueado por `createdAt == request.time`.
 10. **Immutable `createdAt` Tampering**: Admin atualizando imóvel tentando alterar `createdAt` -> Bloqueado por `incoming().createdAt == existing().createdAt`.
 11. **Denial-of-Wallet Oversized String**: Enviar `message` com 100.000 caracteres em `leads` -> Bloqueado por `data.message.size() <= 2000`.
-12. **Unbounded Array Injection**: Enviar `gallery` com 500 itens em `properties` -> Bloqueado por `data.gallery.size() <= 20`.
+12. **Unbounded Array Injection**: Enviar `gallery` com 500 itens em `properties` -> Bloqueado por `data.gallery.size() <= 100`.

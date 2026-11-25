@@ -72,18 +72,21 @@ import type {
   Task,
   Visit
 } from '../types/realEstate';
-import { slugifyText } from '../utils/utm';
 
-const LOCAL_STORE_KEY = 'pv_admin_local_store_v1';
+const PUBLIC_CACHE_KEY = 'pv_public_snapshot_cache_v2';
 const ADMIN_TOKEN_STORAGE_KEY = 'pv_admin_session_token';
 
-interface LocalAdminStore {
-  hasLocalEdits: boolean;
+export interface PublicSiteSnapshot {
+  hasAdminEdits: boolean;
+  updatedAt?: string;
   siteSettings: SiteSettings;
   professionalProfile: ProfessionalProfile;
   properties: Property[];
   empreendimentos: Empreendimento[];
   landingPages: LandingPage[];
+}
+
+export interface FullAdminStoreData extends PublicSiteSnapshot {
   leads: Lead[];
   clients: Client[];
   pipeline: PipelineItem[];
@@ -95,90 +98,57 @@ interface LocalAdminStore {
   adminUsers: AdminUser[];
 }
 
-function createInitialStore(): LocalAdminStore {
-  return {
-    hasLocalEdits: false,
-    siteSettings: { ...DEFAULT_SITE_SETTINGS },
-    professionalProfile: { ...DEFAULT_PROFESSIONAL_PROFILE },
-    properties: [...DEFAULT_PROPERTIES],
-    empreendimentos: [...DEFAULT_EMPREENDIMENTOS],
-    landingPages: [{ ...DEFAULT_LANDING_PAGE }],
-    leads: [],
-    clients: [],
-    pipeline: [],
-    visits: [],
-    proposals: [],
-    tasks: [],
-    media: [],
-    analytics: [],
-    adminUsers: []
-  };
-}
-
-function readStore(): LocalAdminStore {
-  try {
-    const raw = window.localStorage.getItem(LOCAL_STORE_KEY);
-    if (!raw) {
-      const initial = createInitialStore();
-      window.localStorage.setItem(LOCAL_STORE_KEY, JSON.stringify(initial));
-      return initial;
-    }
-    const parsed = JSON.parse(raw) as Partial<LocalAdminStore>;
-    const defaults = createInitialStore();
-    const mergedProfile = parsed.professionalProfile
-      ? { ...defaults.professionalProfile, ...parsed.professionalProfile }
-      : defaults.professionalProfile;
-    if (
-      !mergedProfile.portraitUrl ||
-      mergedProfile.portraitUrl.includes('patricia_construction_portrait_1794928223577')
-    ) {
-      mergedProfile.portraitUrl = defaults.professionalProfile.portraitUrl;
-    }
-    const mergedSettings = parsed.siteSettings
-      ? { ...defaults.siteSettings, ...parsed.siteSettings }
-      : defaults.siteSettings;
-    if (
-      !mergedSettings.logoUrl ||
-      mergedSettings.logoUrl.includes('Logo-Dourado-Patricia-Vicente-Imoveis.png')
-    ) {
-      mergedSettings.logoUrl = defaults.siteSettings.logoUrl;
-    }
-    return {
-      hasLocalEdits: Boolean(parsed.hasLocalEdits),
-      siteSettings: mergedSettings,
-      professionalProfile: mergedProfile,
-      properties: Array.isArray(parsed.properties) ? parsed.properties : defaults.properties,
-      empreendimentos: Array.isArray(parsed.empreendimentos) ? parsed.empreendimentos : defaults.empreendimentos,
-      landingPages: Array.isArray(parsed.landingPages) ? parsed.landingPages : defaults.landingPages,
-      leads: Array.isArray(parsed.leads) ? parsed.leads : [],
-      clients: Array.isArray(parsed.clients) ? parsed.clients : [],
-      pipeline: Array.isArray(parsed.pipeline) ? parsed.pipeline : [],
-      visits: Array.isArray(parsed.visits) ? parsed.visits : [],
-      proposals: Array.isArray(parsed.proposals) ? parsed.proposals : [],
-      tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
-      media: Array.isArray(parsed.media) ? parsed.media : [],
-      analytics: Array.isArray(parsed.analytics) ? parsed.analytics : [],
-      adminUsers: Array.isArray(parsed.adminUsers) ? parsed.adminUsers : []
-    };
-  } catch {
-    return createInitialStore();
-  }
-}
-
-function writeStore(next: LocalAdminStore): void {
-  try {
-    window.localStorage.setItem(LOCAL_STORE_KEY, JSON.stringify(next));
-  } catch {
-    // Ignore storage quota errors cleanly
-  }
-}
-
 function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function readCachedPublicSnapshot(): PublicSiteSnapshot {
+  try {
+    const raw = window.localStorage.getItem(PUBLIC_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<PublicSiteSnapshot>;
+      if (parsed && parsed.siteSettings && parsed.professionalProfile) {
+        return {
+          hasAdminEdits: Boolean(parsed.hasAdminEdits),
+          updatedAt: parsed.updatedAt,
+          siteSettings: { ...DEFAULT_SITE_SETTINGS, ...parsed.siteSettings },
+          professionalProfile: {
+            ...DEFAULT_PROFESSIONAL_PROFILE,
+            ...parsed.professionalProfile
+          },
+          properties: Array.isArray(parsed.properties) ? parsed.properties : DEFAULT_PROPERTIES,
+          empreendimentos: Array.isArray(parsed.empreendimentos)
+            ? parsed.empreendimentos
+            : DEFAULT_EMPREENDIMENTOS,
+          landingPages: Array.isArray(parsed.landingPages)
+            ? parsed.landingPages
+            : [DEFAULT_LANDING_PAGE]
+        };
+      }
+    }
+  } catch {
+    // Ignore storage read error
+  }
+  return {
+    hasAdminEdits: false,
+    siteSettings: { ...DEFAULT_SITE_SETTINGS },
+    professionalProfile: { ...DEFAULT_PROFESSIONAL_PROFILE },
+    properties: [...DEFAULT_PROPERTIES],
+    empreendimentos: [...DEFAULT_EMPREENDIMENTOS],
+    landingPages: [{ ...DEFAULT_LANDING_PAGE }]
+  };
+}
+
+function writeCachedPublicSnapshot(snapshot: PublicSiteSnapshot): void {
+  try {
+    window.localStorage.setItem(PUBLIC_CACHE_KEY, JSON.stringify(snapshot));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
 // ============================================================================
-// Session Token Helpers (for Credential Login)
+// Session Token & Auth Header Helpers
 // ============================================================================
 
 export function getStoredAdminToken(): string | null {
@@ -206,6 +176,28 @@ export function setStoredAdminToken(token: string | null): void {
   }
 }
 
+async function getAdminRequestHeaders(includeJson = true): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  if (includeJson) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const token = getStoredAdminToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  if (auth.currentUser) {
+    try {
+      const idToken = await auth.currentUser.getIdToken();
+      if (idToken) {
+        headers['x-firebase-id-token'] = idToken;
+      }
+    } catch {
+      // Ignore optional Firebase ID token error
+    }
+  }
+  return headers;
+}
+
 async function safeParseJson<T>(res: Response): Promise<T | null> {
   try {
     const text = await res.text();
@@ -216,12 +208,34 @@ async function safeParseJson<T>(res: Response): Promise<T | null> {
   }
 }
 
+async function adminApiFetch<T>(url: string, init: RequestInit = {}): Promise<T> {
+  const baseHeaders = await getAdminRequestHeaders(Boolean(init.body));
+  const res = await fetch(url, {
+    ...init,
+    credentials: 'include',
+    cache: 'no-store',
+    headers: {
+      ...baseHeaders,
+      ...(init.headers as Record<string, string> | undefined)
+    }
+  });
+
+  const json = await safeParseJson<T & { error?: string }>(res);
+  if (!res.ok) {
+    throw new Error(
+      json?.error || `Falha ao salvar no banco de dados (HTTP ${res.status}).`
+    );
+  }
+  return (json || ({} as T)) as T;
+}
+
 export async function checkCredentialSession(): Promise<{ authenticated: boolean; email?: string }> {
   try {
     const token = getStoredAdminToken();
     const res = await fetch('/api/admin/session', {
       method: 'GET',
       credentials: 'include',
+      cache: 'no-store',
       headers: token ? { Authorization: `Bearer ${token}` } : undefined
     });
     if (!res.ok) return { authenticated: false };
@@ -280,672 +294,534 @@ export async function isCloudFirebaseAdminActive(): Promise<boolean> {
 }
 
 // ============================================================================
-// Public Readers & Trackers (Respect local admin edits when present)
+// Public Readers & Trackers (Persistent Server DB + Cloud Firestore)
 // ============================================================================
 
-export async function getPublicSiteSettings(): Promise<SiteSettings> {
-  const store = readStore();
-  if (store.hasLocalEdits) {
-    return store.siteSettings;
+export async function getPublicSnapshotUnified(): Promise<PublicSiteSnapshot> {
+  try {
+    const res = await fetch('/api/public/data', { cache: 'no-store' });
+    if (res.ok) {
+      const serverData = await safeParseJson<PublicSiteSnapshot>(res);
+      if (serverData && serverData.siteSettings && serverData.professionalProfile) {
+        if (serverData.hasAdminEdits) {
+          writeCachedPublicSnapshot(serverData);
+          return serverData;
+        }
+        // Server still holds unedited seed: prefer Firestore if already populated by verified owner
+        try {
+          const [fsSettings, fsProfile, fsProps, fsEmps, fsLps] = await Promise.all([
+            fsGetSiteSettings(),
+            fsGetProfessionalProfile(),
+            fsListPublishedProperties(),
+            fsListPublishedEmpreendimentos(),
+            fsListPublishedLandingPages()
+          ]);
+          const merged: PublicSiteSnapshot = {
+            hasAdminEdits: false,
+            updatedAt: serverData.updatedAt,
+            siteSettings: fsSettings,
+            professionalProfile: fsProfile,
+            properties: fsProps.length > 0 ? fsProps : serverData.properties,
+            empreendimentos: fsEmps.length > 0 ? fsEmps : serverData.empreendimentos,
+            landingPages: fsLps.length > 0 ? fsLps : serverData.landingPages
+          };
+          writeCachedPublicSnapshot(merged);
+          return merged;
+        } catch {
+          writeCachedPublicSnapshot(serverData);
+          return serverData;
+        }
+      }
+    }
+  } catch {
+    // Fall back to Firestore or cached snapshot below
   }
-  return fsGetSiteSettings();
+
+  try {
+    const [siteSettings, professionalProfile, properties, empreendimentos, landingPages] =
+      await Promise.all([
+        fsGetSiteSettings(),
+        fsGetProfessionalProfile(),
+        fsListPublishedProperties(),
+        fsListPublishedEmpreendimentos(),
+        fsListPublishedLandingPages()
+      ]);
+    const fsSnapshot: PublicSiteSnapshot = {
+      hasAdminEdits: false,
+      siteSettings,
+      professionalProfile,
+      properties,
+      empreendimentos,
+      landingPages
+    };
+    writeCachedPublicSnapshot(fsSnapshot);
+    return fsSnapshot;
+  } catch {
+    return readCachedPublicSnapshot();
+  }
+}
+
+export async function getPublicSiteSettings(): Promise<SiteSettings> {
+  return (await getPublicSnapshotUnified()).siteSettings;
 }
 
 export async function getPublicProfessionalProfile(): Promise<ProfessionalProfile> {
-  const store = readStore();
-  if (store.hasLocalEdits) {
-    return store.professionalProfile;
-  }
-  return fsGetProfessionalProfile();
+  return (await getPublicSnapshotUnified()).professionalProfile;
 }
 
 export async function listPublicProperties(): Promise<Property[]> {
-  const store = readStore();
-  if (store.hasLocalEdits) {
-    return store.properties.filter((p) => p.published);
-  }
-  return fsListPublishedProperties();
+  return (await getPublicSnapshotUnified()).properties;
 }
 
 export async function listPublicEmpreendimentos(): Promise<Empreendimento[]> {
-  const store = readStore();
-  if (store.hasLocalEdits) {
-    return store.empreendimentos.filter((e) => e.published);
-  }
-  return fsListPublishedEmpreendimentos();
+  return (await getPublicSnapshotUnified()).empreendimentos;
 }
 
 export async function listPublicLandingPages(): Promise<LandingPage[]> {
-  const store = readStore();
-  if (store.hasLocalEdits) {
-    const published = store.landingPages.filter((lp) => lp.published);
-    return published.length > 0 ? published : [{ ...DEFAULT_LANDING_PAGE }];
-  }
-  return fsListPublishedLandingPages();
+  return (await getPublicSnapshotUnified()).landingPages;
 }
 
 export async function submitPublicLeadUnified(
   input: Parameters<typeof fsSubmitPublicLead>[0]
 ): Promise<string> {
-  const score: Lead['score'] =
-    input.interestType === 'agendamento_visita' || Boolean(input.preferredDate) || Boolean(input.propertyId)
-      ? 'quente'
-      : input.message && input.message.trim().length > 25
-        ? 'morno'
-        : 'frio';
-
   let id = makeId('lead');
   try {
     id = await fsSubmitPublicLead(input);
   } catch {
-    // Fallback cleanly if offline/unconfigured while keeping lead captured locally
+    // Also persist on server DB below
   }
 
-  const store = readStore();
-  const leadRecord: Lead = {
-    id,
-    name: input.name.trim(),
-    phone: input.phone.trim(),
-    email: input.email?.trim() || undefined,
-    message: input.message?.trim() || undefined,
-    interestType: input.interestType,
-    preferredDate: input.preferredDate || undefined,
-    propertyId: input.propertyId || undefined,
-    propertyTitle: input.propertyTitle || undefined,
-    empreendimentoId: input.empreendimentoId || undefined,
-    source: input.source || 'site',
-    utmSource: input.utmSource,
-    utmMedium: input.utmMedium,
-    utmCampaign: input.utmCampaign,
-    utmContent: input.utmContent,
-    utmTerm: input.utmTerm,
-    score,
-    status: 'novo',
-    lgpdConsent: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-  writeStore({
-    ...store,
-    leads: [leadRecord, ...store.leads.filter((l) => l.id !== id)]
-  });
+  try {
+    const res = await fetch('/api/public/leads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...input, id })
+    });
+    const json = await safeParseJson<{ id?: string }>(res);
+    if (json?.id) id = json.id;
+  } catch {
+    // Ignore secondary write error if Firestore already stored it
+  }
   return id;
 }
 
 export async function trackAnalyticsEventUnified(
   input: Parameters<typeof fsTrackAnalyticsEvent>[0]
 ): Promise<void> {
-  await fsTrackAnalyticsEvent(input);
-  const store = readStore();
-  const eventRecord: AnalyticsEvent = {
-    id: makeId('evt'),
-    eventType: input.eventType,
-    path: input.path || '/',
-    targetId: input.targetId,
-    source: input.source,
-    utmSource: input.utmSource,
-    utmMedium: input.utmMedium,
-    utmCampaign: input.utmCampaign,
-    createdAt: new Date().toISOString()
-  };
-  writeStore({
-    ...store,
-    analytics: [eventRecord, ...store.analytics].slice(0, 500)
-  });
+  fsTrackAnalyticsEvent(input).catch(() => undefined);
+  fetch('/api/public/analytics', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  }).catch(() => undefined);
 }
 
 // ============================================================================
-// Admin Readers
+// Admin Readers (Server Persistent DB + Cloud Firestore Sync)
 // ============================================================================
 
+export async function adminFetchFullStore(): Promise<FullAdminStoreData> {
+  const serverStore = await adminApiFetch<FullAdminStoreData>('/api/admin/store');
+
+  if (await isCloudFirebaseAdminActive()) {
+    try {
+      const [
+        fsProps,
+        fsEmps,
+        fsLps,
+        fsLeads,
+        fsClients,
+        fsPipeline,
+        fsVisits,
+        fsProposals,
+        fsTasks,
+        fsMedia,
+        fsAnalytics,
+        fsAdmins
+      ] = await Promise.all([
+        fsAdminListAllProperties(),
+        fsAdminListAllEmpreendimentos(),
+        fsAdminListAllLandingPages(),
+        fsAdminListLeads(),
+        fsAdminListClients(),
+        fsAdminListPipeline(),
+        fsAdminListVisits(),
+        fsAdminListProposals(),
+        fsAdminListTasks(),
+        fsAdminListMedia(),
+        fsAdminListAnalytics(),
+        fsAdminListUsers()
+      ]);
+
+      // If server hasn't been edited yet and Firestore already has items, use Firestore
+      if (!serverStore.hasAdminEdits && (fsProps.length > 0 || fsLeads.length > 0)) {
+        return {
+          ...serverStore,
+          properties: fsProps.length > 0 ? fsProps : serverStore.properties,
+          empreendimentos: fsEmps.length > 0 ? fsEmps : serverStore.empreendimentos,
+          landingPages: fsLps.length > 0 ? fsLps : serverStore.landingPages,
+          leads: fsLeads.length > 0 ? fsLeads : serverStore.leads,
+          clients: fsClients.length > 0 ? fsClients : serverStore.clients,
+          pipeline: fsPipeline.length > 0 ? fsPipeline : serverStore.pipeline,
+          visits: fsVisits.length > 0 ? fsVisits : serverStore.visits,
+          proposals: fsProposals.length > 0 ? fsProposals : serverStore.proposals,
+          tasks: fsTasks.length > 0 ? fsTasks : serverStore.tasks,
+          media: fsMedia.length > 0 ? fsMedia : serverStore.media,
+          analytics: fsAnalytics.length > 0 ? fsAnalytics : serverStore.analytics,
+          adminUsers: fsAdmins.length > 0 ? fsAdmins : serverStore.adminUsers
+        };
+      }
+    } catch {
+      // Keep server store as authoritative fallback
+    }
+  }
+
+  return serverStore;
+}
+
 export async function adminListAllProperties(): Promise<Property[]> {
-  if (await isCloudFirebaseAdminActive()) return fsAdminListAllProperties();
-  return readStore().properties;
+  return (await adminFetchFullStore()).properties;
 }
 
 export async function adminListAllEmpreendimentos(): Promise<Empreendimento[]> {
-  if (await isCloudFirebaseAdminActive()) return fsAdminListAllEmpreendimentos();
-  return readStore().empreendimentos;
+  return (await adminFetchFullStore()).empreendimentos;
 }
 
 export async function adminListAllLandingPages(): Promise<LandingPage[]> {
-  if (await isCloudFirebaseAdminActive()) return fsAdminListAllLandingPages();
-  return readStore().landingPages;
+  return (await adminFetchFullStore()).landingPages;
 }
 
 export async function adminListLeads(): Promise<Lead[]> {
-  if (await isCloudFirebaseAdminActive()) return fsAdminListLeads();
-  return readStore().leads;
+  return (await adminFetchFullStore()).leads;
 }
 
 export async function adminListClients(): Promise<Client[]> {
-  if (await isCloudFirebaseAdminActive()) return fsAdminListClients();
-  return readStore().clients;
+  return (await adminFetchFullStore()).clients;
 }
 
 export async function adminListPipeline(): Promise<PipelineItem[]> {
-  if (await isCloudFirebaseAdminActive()) return fsAdminListPipeline();
-  return readStore().pipeline;
+  return (await adminFetchFullStore()).pipeline;
 }
 
 export async function adminListVisits(): Promise<Visit[]> {
-  if (await isCloudFirebaseAdminActive()) return fsAdminListVisits();
-  return readStore().visits;
+  return (await adminFetchFullStore()).visits;
 }
 
 export async function adminListProposals(): Promise<Proposal[]> {
-  if (await isCloudFirebaseAdminActive()) return fsAdminListProposals();
-  return readStore().proposals;
+  return (await adminFetchFullStore()).proposals;
 }
 
 export async function adminListTasks(): Promise<Task[]> {
-  if (await isCloudFirebaseAdminActive()) return fsAdminListTasks();
-  return readStore().tasks;
+  return (await adminFetchFullStore()).tasks;
 }
 
 export async function adminListMedia(): Promise<MediaAsset[]> {
-  if (await isCloudFirebaseAdminActive()) return fsAdminListMedia();
-  return readStore().media;
+  return (await adminFetchFullStore()).media;
 }
 
 export async function adminListAnalytics(): Promise<AnalyticsEvent[]> {
-  if (await isCloudFirebaseAdminActive()) return fsAdminListAnalytics();
-  return readStore().analytics;
+  return (await adminFetchFullStore()).analytics;
 }
 
 export async function adminListUsers(): Promise<AdminUser[]> {
-  if (await isCloudFirebaseAdminActive()) return fsAdminListUsers();
-  return readStore().adminUsers;
+  return (await adminFetchFullStore()).adminUsers;
 }
 
 // ============================================================================
-// Admin Writers
+// Admin Writers (Always Persist to Server DB + Mirror to Cloud Firestore)
 // ============================================================================
 
 export async function bootstrapInitialAdminData(): Promise<void> {
+  await adminApiFetch('/api/admin/store/bootstrap', { method: 'POST' });
   if (await isCloudFirebaseAdminActive()) {
     await fsBootstrapInitialFirestoreData();
-    return;
   }
-  const store = readStore();
-  writeStore({
-    ...store,
-    properties: store.properties.length > 0 ? store.properties : [...DEFAULT_PROPERTIES],
-    empreendimentos:
-      store.empreendimentos.length > 0 ? store.empreendimentos : [...DEFAULT_EMPREENDIMENTOS],
-    landingPages: store.landingPages.length > 0 ? store.landingPages : [{ ...DEFAULT_LANDING_PAGE }]
-  });
 }
 
 export async function saveSiteSettings(settings: SiteSettings): Promise<void> {
-  if (await isCloudFirebaseAdminActive()) {
-    await fsSaveSiteSettings(settings);
-    return;
-  }
-  const store = readStore();
-  writeStore({
-    ...store,
-    hasLocalEdits: true,
-    siteSettings: { ...settings, id: 'main', updatedAt: new Date().toISOString() }
+  const saved = await adminApiFetch<SiteSettings>('/api/admin/store/settings', {
+    method: 'PUT',
+    body: JSON.stringify(settings)
   });
+  if (await isCloudFirebaseAdminActive()) {
+    await fsSaveSiteSettings(saved);
+  }
 }
 
 export async function saveProfessionalProfile(profile: ProfessionalProfile): Promise<void> {
-  if (await isCloudFirebaseAdminActive()) {
-    await fsSaveProfessionalProfile(profile);
-    return;
-  }
-  const store = readStore();
-  writeStore({
-    ...store,
-    hasLocalEdits: true,
-    professionalProfile: { ...profile, id: 'main', updatedAt: new Date().toISOString() }
+  const saved = await adminApiFetch<ProfessionalProfile>('/api/admin/store/profile', {
+    method: 'PUT',
+    body: JSON.stringify(profile)
   });
+  if (await isCloudFirebaseAdminActive()) {
+    await fsSaveProfessionalProfile(saved);
+  }
 }
 
 export async function saveProperty(
   property: Omit<Property, 'id'> & { id?: string }
 ): Promise<string> {
+  const res = await adminApiFetch<{ id: string; item: Property }>('/api/admin/store/properties', {
+    method: 'POST',
+    body: JSON.stringify(property)
+  });
   if (await isCloudFirebaseAdminActive()) {
-    return fsSaveProperty(property);
+    await fsSaveProperty({ ...res.item, id: res.id });
   }
-  const store = readStore();
-  const id = property.id || makeId('prop');
-  const nextItem: Property = {
-    ...property,
-    id,
-    slug: slugifyText(property.slug || property.title),
-    updatedAt: new Date().toISOString(),
-    createdAt: property.createdAt || new Date().toISOString()
-  };
-  const exists = store.properties.some((p) => p.id === id);
-  const properties = exists
-    ? store.properties.map((p) => (p.id === id ? nextItem : p))
-    : [nextItem, ...store.properties];
-  writeStore({ ...store, hasLocalEdits: true, properties });
-  return id;
+  return res.id;
 }
 
 export async function removeProperty(id: string): Promise<void> {
+  await adminApiFetch(`/api/admin/store/properties/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
   if (await isCloudFirebaseAdminActive()) {
     await fsRemoveProperty(id);
-    return;
   }
-  const store = readStore();
-  writeStore({
-    ...store,
-    hasLocalEdits: true,
-    properties: store.properties.filter((p) => p.id !== id)
-  });
 }
 
 export async function saveEmpreendimento(
   emp: Omit<Empreendimento, 'id'> & { id?: string }
 ): Promise<string> {
+  const res = await adminApiFetch<{ id: string; item: Empreendimento }>(
+    '/api/admin/store/empreendimentos',
+    {
+      method: 'POST',
+      body: JSON.stringify(emp)
+    }
+  );
   if (await isCloudFirebaseAdminActive()) {
-    return fsSaveEmpreendimento(emp);
+    await fsSaveEmpreendimento({ ...res.item, id: res.id });
   }
-  const store = readStore();
-  const id = emp.id || makeId('emp');
-  const nextItem: Empreendimento = {
-    ...emp,
-    id,
-    slug: slugifyText(emp.slug || emp.name),
-    updatedAt: new Date().toISOString(),
-    createdAt: emp.createdAt || new Date().toISOString()
-  };
-  const exists = store.empreendimentos.some((e) => e.id === id);
-  const empreendimentos = exists
-    ? store.empreendimentos.map((e) => (e.id === id ? nextItem : e))
-    : [nextItem, ...store.empreendimentos];
-  writeStore({ ...store, hasLocalEdits: true, empreendimentos });
-  return id;
+  return res.id;
 }
 
 export async function removeEmpreendimento(id: string): Promise<void> {
+  await adminApiFetch(`/api/admin/store/empreendimentos/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
   if (await isCloudFirebaseAdminActive()) {
     await fsRemoveEmpreendimento(id);
-    return;
   }
-  const store = readStore();
-  writeStore({
-    ...store,
-    hasLocalEdits: true,
-    empreendimentos: store.empreendimentos.filter((e) => e.id !== id)
-  });
 }
 
 export async function saveLandingPage(
   lp: Omit<LandingPage, 'id'> & { id?: string }
 ): Promise<string> {
+  const res = await adminApiFetch<{ id: string; item: LandingPage }>(
+    '/api/admin/store/landing-pages',
+    {
+      method: 'POST',
+      body: JSON.stringify(lp)
+    }
+  );
   if (await isCloudFirebaseAdminActive()) {
-    return fsSaveLandingPage(lp);
+    await fsSaveLandingPage({ ...res.item, id: res.id });
   }
-  const store = readStore();
-  const id = lp.id || makeId('lp');
-  let landingPages = [...store.landingPages];
-  if (lp.isPremiumShowcase && lp.published) {
-    landingPages = landingPages.map((existing) =>
-      existing.id !== id ? { ...existing, isPremiumShowcase: false } : existing
-    );
-  }
-  const nextItem: LandingPage = {
-    ...lp,
-    id,
-    slug: slugifyText(lp.slug || lp.title),
-    updatedAt: new Date().toISOString(),
-    createdAt: lp.createdAt || new Date().toISOString()
-  };
-  const exists = landingPages.some((item) => item.id === id);
-  landingPages = exists
-    ? landingPages.map((item) => (item.id === id ? nextItem : item))
-    : [nextItem, ...landingPages];
-  writeStore({ ...store, hasLocalEdits: true, landingPages });
-  return id;
+  return res.id;
 }
 
 export async function removeLandingPage(id: string): Promise<void> {
+  await adminApiFetch(`/api/admin/store/landing-pages/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
   if (await isCloudFirebaseAdminActive()) {
     await fsRemoveLandingPage(id);
-    return;
   }
-  const store = readStore();
-  writeStore({
-    ...store,
-    hasLocalEdits: true,
-    landingPages: store.landingPages.filter((lp) => lp.id !== id)
-  });
 }
 
 export async function updateLeadAdmin(
   leadId: string,
   updates: Partial<Pick<Lead, 'score' | 'status' | 'message'>>
 ): Promise<void> {
-  if (await isCloudFirebaseAdminActive()) {
-    await fsUpdateLeadAdmin(leadId, updates);
-    return;
-  }
-  const store = readStore();
-  writeStore({
-    ...store,
-    leads: store.leads.map((l) =>
-      l.id === leadId ? { ...l, ...updates, updatedAt: new Date().toISOString() } : l
-    )
+  await adminApiFetch(`/api/admin/store/leads/${encodeURIComponent(leadId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates)
   });
+  if (await isCloudFirebaseAdminActive()) {
+    await fsUpdateLeadAdmin(leadId, updates).catch(() => undefined);
+  }
 }
 
 export async function removeLead(leadId: string): Promise<void> {
-  if (await isCloudFirebaseAdminActive()) {
-    await fsRemoveLead(leadId);
-    return;
-  }
-  const store = readStore();
-  writeStore({
-    ...store,
-    leads: store.leads.filter((l) => l.id !== leadId)
+  await adminApiFetch(`/api/admin/store/leads/${encodeURIComponent(leadId)}`, {
+    method: 'DELETE'
   });
+  if (await isCloudFirebaseAdminActive()) {
+    await fsRemoveLead(leadId).catch(() => undefined);
+  }
 }
 
 export async function convertLeadToCrm(
   lead: Lead
 ): Promise<{ clientId: string; pipelineId: string }> {
+  const result = await adminApiFetch<{ clientId: string; pipelineId: string }>(
+    `/api/admin/store/leads/${encodeURIComponent(lead.id)}/convert`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ lead })
+    }
+  );
   if (await isCloudFirebaseAdminActive()) {
-    return fsConvertLeadToCrm(lead);
+    await fsConvertLeadToCrm(lead).catch(() => undefined);
   }
-  const store = readStore();
-  const clientId = makeId('client');
-  const pipelineId = makeId('pipe');
-  const taskId = makeId('task');
-  const now = new Date().toISOString();
-
-  const initialInteraction = `[${new Date().toLocaleDateString('pt-BR')}] Lead capturado via ${lead.source}: ${
-    lead.message || lead.interestType
-  }`;
-
-  const newClient: Client = {
-    id: clientId,
-    name: lead.name,
-    phone: lead.phone,
-    email: lead.email,
-    origin: lead.utmSource || lead.source,
-    score: lead.score,
-    stage: 'contato',
-    preferredRegions: ['Sorocaba e região'],
-    tags: [lead.interestType, lead.utmCampaign || 'organico'].filter(Boolean),
-    interestPropertyIds: lead.propertyId ? [lead.propertyId] : [],
-    interactions: [initialInteraction],
-    notes: lead.message || '',
-    createdAt: now,
-    updatedAt: now
-  };
-
-  const newPipeline: PipelineItem = {
-    id: pipelineId,
-    clientId,
-    clientName: lead.name,
-    leadId: lead.id,
-    propertyId: lead.propertyId,
-    propertyTitle: lead.propertyTitle,
-    stage: lead.interestType === 'agendamento_visita' ? 'visita_agendada' : 'contato',
-    score: lead.score,
-    tags: [lead.interestType],
-    notes: lead.message,
-    createdAt: now,
-    updatedAt: now
-  };
-
-  const newTask: Task = {
-    id: taskId,
-    title: `Primeiro retorno para ${lead.name}`,
-    description: `Contato via ${lead.phone}${lead.propertyTitle ? ` sobre ${lead.propertyTitle}` : ''}`,
-    clientId,
-    clientName: lead.name,
-    dueDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
-    priority: lead.score === 'quente' ? 'alta' : 'media',
-    completed: false,
-    automationTrigger: 'conversao_lead',
-    createdAt: now,
-    updatedAt: now
-  };
-
-  writeStore({
-    ...store,
-    clients: [newClient, ...store.clients],
-    pipeline: [newPipeline, ...store.pipeline],
-    tasks: [newTask, ...store.tasks],
-    leads: store.leads.map((l) =>
-      l.id === lead.id ? { ...l, status: 'contato', updatedAt: now } : l
-    )
-  });
-
-  return { clientId, pipelineId };
+  return result;
 }
 
 export async function saveClient(client: Omit<Client, 'id'> & { id?: string }): Promise<string> {
+  const res = await adminApiFetch<{ id: string; item: Client }>('/api/admin/store/clients', {
+    method: 'POST',
+    body: JSON.stringify(client)
+  });
   if (await isCloudFirebaseAdminActive()) {
-    return fsSaveClient(client);
+    await fsSaveClient({ ...res.item, id: res.id });
   }
-  const store = readStore();
-  const id = client.id || makeId('client');
-  const nextItem: Client = {
-    ...client,
-    id,
-    updatedAt: new Date().toISOString(),
-    createdAt: client.createdAt || new Date().toISOString()
-  };
-  const exists = store.clients.some((c) => c.id === id);
-  const clients = exists
-    ? store.clients.map((c) => (c.id === id ? nextItem : c))
-    : [nextItem, ...store.clients];
-  writeStore({ ...store, clients });
-  return id;
+  return res.id;
 }
 
 export async function removeClient(id: string): Promise<void> {
+  await adminApiFetch(`/api/admin/store/clients/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
   if (await isCloudFirebaseAdminActive()) {
-    await fsRemoveClient(id);
-    return;
+    await fsRemoveClient(id).catch(() => undefined);
   }
-  const store = readStore();
-  writeStore({ ...store, clients: store.clients.filter((c) => c.id !== id) });
 }
 
 export async function savePipelineItem(
   item: Omit<PipelineItem, 'id'> & { id?: string }
 ): Promise<string> {
+  const res = await adminApiFetch<{ id: string; item: PipelineItem }>(
+    '/api/admin/store/pipeline',
+    {
+      method: 'POST',
+      body: JSON.stringify(item)
+    }
+  );
   if (await isCloudFirebaseAdminActive()) {
-    return fsSavePipelineItem(item);
+    await fsSavePipelineItem({ ...res.item, id: res.id });
   }
-  const store = readStore();
-  const id = item.id || makeId('pipe');
-  const nextItem: PipelineItem = {
-    ...item,
-    id,
-    updatedAt: new Date().toISOString(),
-    createdAt: item.createdAt || new Date().toISOString()
-  };
-  const exists = store.pipeline.some((p) => p.id === id);
-  const pipeline = exists
-    ? store.pipeline.map((p) => (p.id === id ? nextItem : p))
-    : [nextItem, ...store.pipeline];
-  writeStore({ ...store, pipeline });
-  return id;
+  return res.id;
 }
 
 export async function movePipelineStage(itemId: string, stage: PipelineStage): Promise<void> {
-  if (await isCloudFirebaseAdminActive()) {
-    await fsMovePipelineStage(itemId, stage);
-    return;
-  }
-  const store = readStore();
-  writeStore({
-    ...store,
-    pipeline: store.pipeline.map((p) =>
-      p.id === itemId ? { ...p, stage, updatedAt: new Date().toISOString() } : p
-    )
+  await adminApiFetch(`/api/admin/store/pipeline/${encodeURIComponent(itemId)}/stage`, {
+    method: 'PATCH',
+    body: JSON.stringify({ stage })
   });
+  if (await isCloudFirebaseAdminActive()) {
+    await fsMovePipelineStage(itemId, stage).catch(() => undefined);
+  }
 }
 
 export async function removePipelineItem(id: string): Promise<void> {
+  await adminApiFetch(`/api/admin/store/pipeline/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
   if (await isCloudFirebaseAdminActive()) {
-    await fsRemovePipelineItem(id);
-    return;
+    await fsRemovePipelineItem(id).catch(() => undefined);
   }
-  const store = readStore();
-  writeStore({ ...store, pipeline: store.pipeline.filter((p) => p.id !== id) });
 }
 
 export async function saveVisit(visit: Omit<Visit, 'id'> & { id?: string }): Promise<string> {
+  const res = await adminApiFetch<{ id: string; item: Visit }>('/api/admin/store/visits', {
+    method: 'POST',
+    body: JSON.stringify(visit)
+  });
   if (await isCloudFirebaseAdminActive()) {
-    return fsSaveVisit(visit);
+    await fsSaveVisit({ ...res.item, id: res.id });
   }
-  const store = readStore();
-  const id = visit.id || makeId('visit');
-  const now = new Date().toISOString();
-  const nextItem: Visit = {
-    ...visit,
-    id,
-    updatedAt: now,
-    createdAt: visit.createdAt || now
-  };
-  const exists = store.visits.some((v) => v.id === id);
-  const visits = exists
-    ? store.visits.map((v) => (v.id === id ? nextItem : v))
-    : [nextItem, ...store.visits];
-
-  const tasks = exists
-    ? store.tasks
-    : [
-        {
-          id: makeId('task'),
-          title: `Confirmar visita com ${visit.clientName}`,
-          description: `Imóvel: ${visit.propertyTitle} · Horário: ${visit.scheduledAt}`,
-          dueDate: visit.scheduledAt.slice(0, 10),
-          priority: 'alta' as const,
-          completed: false,
-          automationTrigger: 'visita_agendada',
-          createdAt: now,
-          updatedAt: now
-        },
-        ...store.tasks
-      ];
-
-  writeStore({ ...store, visits, tasks });
-  return id;
+  return res.id;
 }
 
 export async function removeVisit(id: string): Promise<void> {
+  await adminApiFetch(`/api/admin/store/visits/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
   if (await isCloudFirebaseAdminActive()) {
-    await fsRemoveVisit(id);
-    return;
+    await fsRemoveVisit(id).catch(() => undefined);
   }
-  const store = readStore();
-  writeStore({ ...store, visits: store.visits.filter((v) => v.id !== id) });
 }
 
 export async function saveProposal(
   proposal: Omit<Proposal, 'id'> & { id?: string }
 ): Promise<string> {
+  const res = await adminApiFetch<{ id: string; item: Proposal }>('/api/admin/store/proposals', {
+    method: 'POST',
+    body: JSON.stringify(proposal)
+  });
   if (await isCloudFirebaseAdminActive()) {
-    return fsSaveProposal(proposal);
+    await fsSaveProposal({ ...res.item, id: res.id });
   }
-  const store = readStore();
-  const id = proposal.id || makeId('prop-doc');
-  const nextItem: Proposal = {
-    ...proposal,
-    id,
-    updatedAt: new Date().toISOString(),
-    createdAt: proposal.createdAt || new Date().toISOString()
-  };
-  const exists = store.proposals.some((p) => p.id === id);
-  const proposals = exists
-    ? store.proposals.map((p) => (p.id === id ? nextItem : p))
-    : [nextItem, ...store.proposals];
-  writeStore({ ...store, proposals });
-  return id;
+  return res.id;
 }
 
 export async function removeProposal(id: string): Promise<void> {
+  await adminApiFetch(`/api/admin/store/proposals/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
   if (await isCloudFirebaseAdminActive()) {
-    await fsRemoveProposal(id);
-    return;
+    await fsRemoveProposal(id).catch(() => undefined);
   }
-  const store = readStore();
-  writeStore({ ...store, proposals: store.proposals.filter((p) => p.id !== id) });
 }
 
 export async function saveTask(task: Omit<Task, 'id'> & { id?: string }): Promise<string> {
+  const res = await adminApiFetch<{ id: string; item: Task }>('/api/admin/store/tasks', {
+    method: 'POST',
+    body: JSON.stringify(task)
+  });
   if (await isCloudFirebaseAdminActive()) {
-    return fsSaveTask(task);
+    await fsSaveTask({ ...res.item, id: res.id });
   }
-  const store = readStore();
-  const id = task.id || makeId('task');
-  const nextItem: Task = {
-    ...task,
-    id,
-    updatedAt: new Date().toISOString(),
-    createdAt: task.createdAt || new Date().toISOString()
-  };
-  const exists = store.tasks.some((t) => t.id === id);
-  const tasks = exists
-    ? store.tasks.map((t) => (t.id === id ? nextItem : t))
-    : [nextItem, ...store.tasks];
-  writeStore({ ...store, tasks });
-  return id;
+  return res.id;
 }
 
 export async function removeTask(id: string): Promise<void> {
+  await adminApiFetch(`/api/admin/store/tasks/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
   if (await isCloudFirebaseAdminActive()) {
-    await fsRemoveTask(id);
-    return;
+    await fsRemoveTask(id).catch(() => undefined);
   }
-  const store = readStore();
-  writeStore({ ...store, tasks: store.tasks.filter((t) => t.id !== id) });
 }
 
-export async function saveMediaAsset(asset: Omit<MediaAsset, 'id'>): Promise<string> {
+export async function saveMediaAsset(
+  asset: Omit<MediaAsset, 'id'> & { id?: string }
+): Promise<string> {
+  const res = await adminApiFetch<{ id: string; item: MediaAsset }>('/api/admin/store/media', {
+    method: 'POST',
+    body: JSON.stringify(asset)
+  });
   if (await isCloudFirebaseAdminActive()) {
-    return fsSaveMediaAsset(asset);
+    await fsSaveMediaAsset({ ...res.item, id: res.id }).catch(() => undefined);
   }
-  const store = readStore();
-  const id = makeId('media');
-  const nextItem: MediaAsset = {
-    ...asset,
-    id,
-    createdAt: new Date().toISOString()
-  };
-  writeStore({ ...store, media: [nextItem, ...store.media] });
-  return id;
+  return res.id;
 }
 
 export async function removeMediaAsset(id: string): Promise<void> {
+  await adminApiFetch(`/api/admin/store/media/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
   if (await isCloudFirebaseAdminActive()) {
-    await fsRemoveMediaAsset(id);
-    return;
+    await fsRemoveMediaAsset(id).catch(() => undefined);
   }
-  const store = readStore();
-  writeStore({ ...store, media: store.media.filter((m) => m.id !== id) });
 }
 
 export async function saveAdminUser(uid: string, user: Omit<AdminUser, 'id'>): Promise<void> {
+  await adminApiFetch(`/api/admin/store/admin-users/${encodeURIComponent(uid)}`, {
+    method: 'POST',
+    body: JSON.stringify(user)
+  });
   if (await isCloudFirebaseAdminActive()) {
     await fsSaveAdminUser(uid, user);
-    return;
   }
-  const store = readStore();
-  const nextItem: AdminUser = { ...user, id: uid, createdAt: new Date().toISOString() };
-  const exists = store.adminUsers.some((u) => u.id === uid);
-  const adminUsers = exists
-    ? store.adminUsers.map((u) => (u.id === uid ? nextItem : u))
-    : [nextItem, ...store.adminUsers];
-  writeStore({ ...store, adminUsers });
 }
 
 export async function removeAdminUser(uid: string): Promise<void> {
+  await adminApiFetch(`/api/admin/store/admin-users/${encodeURIComponent(uid)}`, {
+    method: 'DELETE'
+  });
   if (await isCloudFirebaseAdminActive()) {
     await fsRemoveAdminUser(uid);
-    return;
   }
-  const store = readStore();
-  writeStore({ ...store, adminUsers: store.adminUsers.filter((u) => u.id !== uid) });
 }

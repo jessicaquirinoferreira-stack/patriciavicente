@@ -20,18 +20,7 @@ import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { checkUserIsAdmin } from '../services/firestoreService';
 import {
-  adminListAllEmpreendimentos,
-  adminListAllLandingPages,
-  adminListAllProperties,
-  adminListAnalytics,
-  adminListClients,
-  adminListLeads,
-  adminListMedia,
-  adminListPipeline,
-  adminListProposals,
-  adminListTasks,
-  adminListUsers,
-  adminListVisits,
+  adminFetchFullStore,
   bootstrapInitialAdminData,
   checkCredentialSession,
   logoutCredentialSession
@@ -121,6 +110,7 @@ export function AdminDashboard({
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [loadingData, setLoadingData] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  const [loadError, setLoadError] = useState('');
 
   const [properties, setProperties] = useState<Property[]>([]);
   const [empreendimentos, setEmpreendimentos] = useState<Empreendimento[]>([]);
@@ -178,34 +168,26 @@ export function AdminDashboard({
   const loadAllAdminData = useCallback(async () => {
     if (!isAuthorized) return;
     setLoadingData(true);
+    setLoadError('');
     try {
-      const [p, e, lp, l, c, pip, v, prop, t, m, an, adm] = await Promise.all([
-        adminListAllProperties(),
-        adminListAllEmpreendimentos(),
-        adminListAllLandingPages(),
-        adminListLeads(),
-        adminListClients(),
-        adminListPipeline(),
-        adminListVisits(),
-        adminListProposals(),
-        adminListTasks(),
-        adminListMedia(),
-        adminListAnalytics(),
-        adminListUsers()
-      ]);
-      setProperties(p);
-      setEmpreendimentos(e);
-      setLandingPages(lp);
-      setLeads(l);
-      setClients(c);
-      setPipeline(pip);
-      setVisits(v);
-      setProposals(prop);
-      setTasks(t);
-      setMedia(m);
-      setAnalytics(an);
-      setAdminUsers(adm);
+      const full = await adminFetchFullStore();
+      setProperties(full.properties);
+      setEmpreendimentos(full.empreendimentos);
+      setLandingPages(full.landingPages);
+      setLeads(full.leads);
+      setClients(full.clients);
+      setPipeline(full.pipeline);
+      setVisits(full.visits);
+      setProposals(full.proposals);
+      setTasks(full.tasks);
+      setMedia(full.media);
+      setAnalytics(full.analytics);
+      setAdminUsers(full.adminUsers);
       await onPublicDataChanged();
+    } catch (err) {
+      setLoadError(
+        err instanceof Error ? err.message : 'Não foi possível carregar os dados salvos.'
+      );
     } finally {
       setLoadingData(false);
     }
@@ -349,7 +331,12 @@ export function AdminDashboard({
           </div>
         </header>
 
-        <div className="p-6 max-w-[1400px] mx-auto">
+        <div className="p-6 max-w-[1400px] mx-auto space-y-4">
+          {loadError ? (
+            <div className="text-xs text-[#991B1B] bg-[#FEF2F2] border border-[#FECACA] rounded-xl px-4 py-3">
+              {loadError}
+            </div>
+          ) : null}
           {activeTab === 'overview' && (
             <AnalyticsOverview
               leads={leads}

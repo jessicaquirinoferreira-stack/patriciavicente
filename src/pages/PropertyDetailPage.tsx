@@ -227,6 +227,24 @@ export function PropertyDetailPage({
                 </div>
               )}
 
+              {property.videos && property.videos.length > 0 && (
+                <div className="space-y-3 pt-2">
+                  <h2 className="text-base font-semibold text-[#18181B]">Vídeos do imóvel</h2>
+                  <div className="grid grid-cols-1 gap-4">
+                    {property.videos.map((videoUrl, idx) => (
+                      <video
+                        key={`${videoUrl}-${idx}`}
+                        src={videoUrl}
+                        controls
+                        playsInline
+                        preload="metadata"
+                        className="w-full max-h-[420px] rounded-xl bg-[#18181B] border border-[#E6E2DA]"
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Aviso obrigatório de confirmação de dados */}
               <div className="bg-[#FAF9F6] border border-[#E6E2DA] rounded-xl p-4 flex items-start gap-3">
                 <Info className="w-4 h-4 text-[#1E4D5C] mt-0.5 shrink-0" />

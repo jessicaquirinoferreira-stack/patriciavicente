@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ExternalLink, Pencil, Plus, Star, Trash2, Upload } from 'lucide-react';
+import { ExternalLink, Pencil, Star, Trash2, Upload } from 'lucide-react';
 import {
   CATEGORY_LABELS,
   type ConfirmationStatus,
@@ -17,11 +17,13 @@ import {
   removeProperty,
   saveEmpreendimento,
   saveLandingPage,
-  saveMediaAsset,
   saveProperty
 } from '../../services/adminStoreService';
+import { uploadMediaWithCompression } from '../../services/blobUploadService';
+import { formatBytes } from '../../utils/mediaCompression';
 import { slugifyText } from '../../utils/utm';
 import { ResilientImage } from '../common/ResilientImage';
+import { PropertyMediaUploader } from './PropertyMediaUploader';
 
 interface ContentManagerProps {
   section: 'properties' | 'empreendimentos' | 'landing_pages' | 'media';
@@ -60,6 +62,8 @@ export function ContentManager({
   const [propParking, setPropParking] = useState('A confirmar');
   const [propArea, setPropArea] = useState('A confirmar');
   const [propCover, setPropCover] = useState(ASSET_IMAGES.naPlantaLaunch);
+  const [propGallery, setPropGallery] = useState<string[]>([ASSET_IMAGES.naPlantaLaunch]);
+  const [propVideos, setPropVideos] = useState<string[]>([]);
   const [propDesc, setPropDesc] = useState('');
   const [propEmpId, setPropEmpId] = useState('');
   const [propFeatured, setPropFeatured] = useState(true);
@@ -77,6 +81,8 @@ export function ContentManager({
   const [empPriceRange, setEmpPriceRange] = useState('Valores a confirmar');
   const [empConfirmStatus, setEmpConfirmStatus] = useState<ConfirmationStatus>('a_confirmar');
   const [empCover, setEmpCover] = useState(ASSET_IMAGES.naPlantaLaunch);
+  const [empGallery, setEmpGallery] = useState<string[]>([ASSET_IMAGES.naPlantaLaunch]);
+  const [empVideos, setEmpVideos] = useState<string[]>([]);
   const [empDesc, setEmpDesc] = useState('');
   const [empFeatured, setEmpFeatured] = useState(true);
   const [empPublished, setEmpPublished] = useState(true);
@@ -103,6 +109,8 @@ export function ContentManager({
   const [mediaStatusMsg, setMediaStatusMsg] = useState('');
 
   const [saving, setSaving] = useState(false);
+  const [saveNotice, setSaveNotice] = useState('');
+  const [errorNotice, setErrorNotice] = useState('');
 
   const resetPropForm = () => {
     setEditingPropId(null);
@@ -122,6 +130,8 @@ export function ContentManager({
     setPropParking('A confirmar');
     setPropArea('A confirmar');
     setPropCover(ASSET_IMAGES.naPlantaLaunch);
+    setPropGallery([ASSET_IMAGES.naPlantaLaunch]);
+    setPropVideos([]);
     setPropDesc('');
     setPropEmpId('');
     setPropFeatured(true);
@@ -129,6 +139,8 @@ export function ContentManager({
   };
 
   const startEditProp = (p: Property) => {
+    const existingGallery =
+      p.gallery && p.gallery.length > 0 ? p.gallery : p.coverImage ? [p.coverImage] : [];
     setEditingPropId(p.id);
     setPropTitle(p.title);
     setPropCode(p.code);
@@ -145,7 +157,9 @@ export function ContentManager({
     setPropBaths(p.bathrooms || 'A confirmar');
     setPropParking(p.parkingSpaces || 'A confirmar');
     setPropArea(p.areaSqm || 'A confirmar');
-    setPropCover(p.coverImage || ASSET_IMAGES.naPlantaLaunch);
+    setPropCover(p.coverImage || existingGallery[0] || '');
+    setPropGallery(existingGallery);
+    setPropVideos(p.videos || []);
     setPropDesc(p.description || '');
     setPropEmpId(p.empreendimentoId || '');
     setPropFeatured(p.featured);
@@ -155,7 +169,12 @@ export function ContentManager({
   const handleSaveProperty = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
+    setSaveNotice('');
+    setErrorNotice('');
     try {
+      const finalGallery =
+        propGallery.length > 0 ? propGallery : propCover ? [propCover] : [];
+      const finalCover = propCover || finalGallery[0] || ASSET_IMAGES.naPlantaLaunch;
       await saveProperty({
         id: editingPropId || undefined,
         code: propCode,
@@ -173,15 +192,24 @@ export function ContentManager({
         bathrooms: propBaths,
         parkingSpaces: propParking,
         areaSqm: propArea,
-        coverImage: propCover,
-        gallery: propCover ? [propCover] : [],
+        coverImage: finalCover,
+        gallery: finalGallery.length > 0 ? finalGallery : [finalCover],
+        videos: propVideos,
         description: propDesc,
         empreendimentoId: propEmpId || undefined,
         featured: propFeatured,
         published: propPublished
       });
+      const wasEditing = Boolean(editingPropId);
       resetPropForm();
       await onRefresh();
+      setSaveNotice(
+        wasEditing
+          ? 'Imóvel atualizado permanentemente no banco de dados e no site.'
+          : 'Imóvel cadastrado permanentemente no banco de dados e no site.'
+      );
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : 'Não foi possível salvar o imóvel.');
     } finally {
       setSaving(false);
     }
@@ -199,12 +227,20 @@ export function ContentManager({
     setEmpPriceRange('Valores a confirmar');
     setEmpConfirmStatus('a_confirmar');
     setEmpCover(ASSET_IMAGES.naPlantaLaunch);
+    setEmpGallery([ASSET_IMAGES.naPlantaLaunch]);
+    setEmpVideos([]);
     setEmpDesc('');
     setEmpFeatured(true);
     setEmpPublished(true);
   };
 
   const startEditEmp = (emp: Empreendimento) => {
+    const existingGallery =
+      emp.gallery && emp.gallery.length > 0
+        ? emp.gallery
+        : emp.coverImage
+          ? [emp.coverImage]
+          : [];
     setEditingEmpId(emp.id);
     setEmpName(emp.name);
     setEmpSlug(emp.slug);
@@ -215,7 +251,9 @@ export function ContentManager({
     setEmpDelivery(emp.deliveryForecast || 'A confirmar');
     setEmpPriceRange(emp.priceRangeText || 'Valores a confirmar');
     setEmpConfirmStatus(emp.confirmationStatus);
-    setEmpCover(emp.coverImage || ASSET_IMAGES.naPlantaLaunch);
+    setEmpCover(emp.coverImage || existingGallery[0] || '');
+    setEmpGallery(existingGallery);
+    setEmpVideos(emp.videos || []);
     setEmpDesc(emp.description || '');
     setEmpFeatured(emp.featured);
     setEmpPublished(emp.published);
@@ -224,7 +262,11 @@ export function ContentManager({
   const handleSaveEmp = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
+    setSaveNotice('');
+    setErrorNotice('');
     try {
+      const finalGallery = empGallery.length > 0 ? empGallery : empCover ? [empCover] : [];
+      const finalCover = empCover || finalGallery[0] || ASSET_IMAGES.naPlantaLaunch;
       await saveEmpreendimento({
         id: editingEmpId || undefined,
         name: empName,
@@ -236,14 +278,25 @@ export function ContentManager({
         deliveryForecast: empDelivery,
         priceRangeText: empPriceRange,
         confirmationStatus: empConfirmStatus,
-        coverImage: empCover,
-        gallery: empCover ? [empCover] : [],
+        coverImage: finalCover,
+        gallery: finalGallery.length > 0 ? finalGallery : [finalCover],
+        videos: empVideos,
         description: empDesc,
         featured: empFeatured,
         published: empPublished
       });
+      const wasEditing = Boolean(editingEmpId);
       resetEmpForm();
       await onRefresh();
+      setSaveNotice(
+        wasEditing
+          ? 'Empreendimento atualizado permanentemente no banco de dados e no site.'
+          : 'Empreendimento cadastrado permanentemente no banco de dados e no site.'
+      );
+    } catch (err) {
+      setErrorNotice(
+        err instanceof Error ? err.message : 'Não foi possível salvar o empreendimento.'
+      );
     } finally {
       setSaving(false);
     }
@@ -286,6 +339,8 @@ export function ContentManager({
   const handleSaveLp = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
+    setSaveNotice('');
+    setErrorNotice('');
     try {
       await saveLandingPage({
         id: editingLpId || undefined,
@@ -309,56 +364,58 @@ export function ContentManager({
         seoDescription: lpHeroSubtitle.slice(0, 240),
         published: lpPublished
       });
+      const wasEditing = Boolean(editingLpId);
       resetLpForm();
       await onRefresh();
+      setSaveNotice(
+        wasEditing
+          ? 'Landing page atualizada permanentemente no banco de dados e no site.'
+          : 'Landing page criada permanentemente no banco de dados e no site.'
+      );
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : 'Não foi possível salvar a landing page.');
     } finally {
       setSaving(false);
     }
   };
 
   const handleUploadMedia = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
     setUploadingMedia(true);
     setMediaStatusMsg('');
+    const files = Array.from(fileList);
+    let totalOrig = 0;
+    let totalFinal = 0;
+    let usedVercelBlob = false;
     try {
-      const reader = new FileReader();
-      const base64 = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-
-      const res = await fetch('/api/blob/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: file.name,
-          contentType: file.type,
-          base64Data: base64,
-          folder: mediaCategory
-        })
-      });
-
-      if (res.ok) {
-        const json = await res.json();
-        await saveMediaAsset({
-          url: json.url,
-          fileName: file.name,
-          contentType: file.type,
-          sizeBytes: file.size,
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const res = await uploadMediaWithCompression(file, {
           category: mediaCategory,
-          storageProvider: 'vercel_blob'
+          onStageChange: (_stage, pct, detail) => {
+            setMediaStatusMsg(`(${i + 1}/${files.length}) ${file.name} · ${pct}% — ${detail || ''}`);
+          }
         });
-        setMediaStatusMsg('Arquivo enviado para Vercel Blob e registrado na biblioteca.');
-      } else {
-        setMediaStatusMsg(
-          'BLOB_READ_WRITE_TOKEN não configurado neste ambiente. Configure na Vercel ou use as imagens do acervo abaixo.'
-        );
+        totalOrig += res.originalSizeBytes;
+        totalFinal += res.uploadedSizeBytes;
+        if (res.storageProvider === 'vercel_blob') usedVercelBlob = true;
       }
+      const savedPct =
+        totalOrig > totalFinal ? Math.round(((totalOrig - totalFinal) / totalOrig) * 100) : 0;
+      setMediaStatusMsg(
+        `${files.length} arquivo(s) enviado(s)${
+          usedVercelBlob ? ' para Vercel Blob' : ''
+        }: ${formatBytes(totalOrig)} → ${formatBytes(totalFinal)}${
+          savedPct > 0 ? ` (-${savedPct}% preservando qualidade)` : ''
+        }.`
+      );
       await onRefresh();
+    } catch (err) {
+      setMediaStatusMsg(err instanceof Error ? err.message : 'Erro ao enviar arquivo.');
     } finally {
       setUploadingMedia(false);
+      e.target.value = '';
     }
   };
 
@@ -386,6 +443,17 @@ export function ContentManager({
               </button>
             ) : null}
           </div>
+
+          {saveNotice ? (
+            <div className="text-xs font-medium text-[#1E4D5C] bg-[#FAF9F6] border border-[#1E4D5C]/30 rounded-xl px-3 py-2">
+              {saveNotice}
+            </div>
+          ) : null}
+          {errorNotice ? (
+            <div className="text-xs font-medium text-[#991B1B] bg-[#FEF2F2] border border-[#FECACA] rounded-xl px-3 py-2">
+              {errorNotice}
+            </div>
+          ) : null}
 
           <div className="grid grid-cols-3 gap-3">
             <label className="col-span-1 space-y-1">
@@ -545,15 +613,19 @@ export function ContentManager({
             </label>
           </div>
 
-          <label className="block space-y-1">
-            <span className="text-xs text-[#71717A]">URL da imagem de capa</span>
-            <input
-              type="text"
-              value={propCover}
-              onChange={(e) => setPropCover(e.target.value)}
-              className="w-full px-3 py-2 text-xs bg-[#FAF9F6] border border-[#E6E2DA] rounded-xl"
-            />
-          </label>
+          <PropertyMediaUploader
+            coverImage={propCover}
+            gallery={propGallery}
+            videos={propVideos}
+            category="imovel"
+            mediaLibrary={media}
+            onMediaLibraryUpdated={onRefresh}
+            onChange={(next) => {
+              setPropCover(next.coverImage);
+              setPropGallery(next.gallery);
+              setPropVideos(next.videos);
+            }}
+          />
 
           <label className="block space-y-1">
             <span className="text-xs text-[#71717A]">Empreendimento vinculado (opcional)</span>
@@ -625,7 +697,9 @@ export function ContentManager({
                     <p className="text-sm font-semibold text-[#18181B] truncate">{p.title}</p>
                     <p className="text-xs text-[#71717A]">
                       {p.code} · {CATEGORY_LABELS[p.category]} ·{' '}
-                      {p.published ? 'Publicado' : 'Rascunho'} · {p.priceText}
+                      {p.published ? 'Publicado' : 'Rascunho'} · {p.priceText} ·{' '}
+                      {(p.gallery?.length || (p.coverImage ? 1 : 0))} foto(s)
+                      {p.videos && p.videos.length > 0 ? ` · ${p.videos.length} vídeo(s)` : ''}
                     </p>
                   </div>
                 </div>
@@ -690,6 +764,17 @@ export function ContentManager({
               </button>
             ) : null}
           </div>
+
+          {saveNotice ? (
+            <div className="text-xs font-medium text-[#1E4D5C] bg-[#FAF9F6] border border-[#1E4D5C]/30 rounded-xl px-3 py-2">
+              {saveNotice}
+            </div>
+          ) : null}
+          {errorNotice ? (
+            <div className="text-xs font-medium text-[#991B1B] bg-[#FEF2F2] border border-[#FECACA] rounded-xl px-3 py-2">
+              {errorNotice}
+            </div>
+          ) : null}
 
           <label className="block space-y-1">
             <span className="text-xs text-[#71717A]">Nome do Empreendimento *</span>
@@ -786,15 +871,19 @@ export function ContentManager({
             </label>
           </div>
 
-          <label className="block space-y-1">
-            <span className="text-xs text-[#71717A]">URL da imagem de capa</span>
-            <input
-              type="text"
-              value={empCover}
-              onChange={(e) => setEmpCover(e.target.value)}
-              className="w-full px-3 py-2 text-xs bg-[#FAF9F6] border border-[#E6E2DA] rounded-xl"
-            />
-          </label>
+          <PropertyMediaUploader
+            coverImage={empCover}
+            gallery={empGallery}
+            videos={empVideos}
+            category="empreendimento"
+            mediaLibrary={media}
+            onMediaLibraryUpdated={onRefresh}
+            onChange={(next) => {
+              setEmpCover(next.coverImage);
+              setEmpGallery(next.gallery);
+              setEmpVideos(next.videos);
+            }}
+          />
 
           <label className="block space-y-1">
             <span className="text-xs text-[#71717A]">Descrição</span>
@@ -923,6 +1012,17 @@ export function ContentManager({
               desativada do destaque.
             </p>
           </div>
+
+          {saveNotice ? (
+            <div className="text-xs font-medium text-[#1E4D5C] bg-[#FAF9F6] border border-[#1E4D5C]/30 rounded-xl px-3 py-2">
+              {saveNotice}
+            </div>
+          ) : null}
+          {errorNotice ? (
+            <div className="text-xs font-medium text-[#991B1B] bg-[#FEF2F2] border border-[#FECACA] rounded-xl px-3 py-2">
+              {errorNotice}
+            </div>
+          ) : null}
 
           <label className="block space-y-1">
             <span className="text-xs text-[#71717A]">Título da campanha / página *</span>
@@ -1117,99 +1217,111 @@ export function ContentManager({
   return (
     <div className="space-y-6">
       <div className="bg-white border border-[#E6E2DA] rounded-2xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <h3 className="font-display text-xl font-semibold text-[#18181B]">
-            Biblioteca de Mídia (Vercel Blob)
-          </h3>
-          <p className="text-xs text-[#52525B]">
-            Faça upload de fotos de imóveis, obras e documentos para uso no catálogo e landing page.
-          </p>
-          {mediaStatusMsg ? (
-            <p className="text-xs font-medium text-[#1E4D5C] pt-1">{mediaStatusMsg}</p>
-          ) : null}
-        </div>
-
-        <div className="flex items-center gap-3">
-          <select
-            value={mediaCategory}
-            onChange={(e) => setMediaCategory(e.target.value as MediaAsset['category'])}
-            className="px-3 py-2 text-xs bg-[#FAF9F6] border border-[#E6E2DA] rounded-xl"
-          >
-            <option value="imovel">Imóvel</option>
-            <option value="empreendimento">Empreendimento</option>
-            <option value="landing_page">Landing Page</option>
-            <option value="perfil">Perfil</option>
-            <option value="documento">Documento</option>
-          </select>
-
-          <label className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#1E4D5C] rounded-xl cursor-pointer whitespace-nowrap">
-            <Upload className="w-3.5 h-3.5" />
-            <span>{uploadingMedia ? 'Enviando...' : 'Enviar arquivo'}</span>
-            <input
-              type="file"
-              accept="image/*,.pdf"
-              onChange={handleUploadMedia}
-              className="hidden"
-            />
-          </label>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-        {Object.entries(ASSET_IMAGES).map(([key, url]) => (
-          <div
-            key={key}
-            className="bg-white border border-[#E6E2DA] rounded-2xl overflow-hidden flex flex-col"
-          >
-            <div className="aspect-[4/3] bg-[#F3F1EC]">
-              <ResilientImage src={url} alt={key} />
-            </div>
-            <div className="p-3 space-y-1">
-              <p className="text-xs font-medium text-[#18181B] truncate">{key}</p>
-              <button
-                type="button"
-                onClick={() => navigator.clipboard.writeText(url)}
-                className="text-[11px] font-medium text-[#1E4D5C] hover:underline cursor-pointer"
-              >
-                Copiar caminho
-              </button>
-            </div>
+          <div className="space-y-1">
+            <h3 className="font-display text-xl font-semibold text-[#18181B]">
+              Biblioteca de Mídia (Vercel Blob · Sem limite)
+            </h3>
+            <p className="text-xs text-[#52525B]">
+              Suba fotos, vídeos ou PDFs direto para o Vercel Blob com compressão inteligente que mantém a nitidez.
+            </p>
+            {mediaStatusMsg ? (
+              <p className="text-xs font-medium text-[#1E4D5C] pt-1">{mediaStatusMsg}</p>
+            ) : null}
           </div>
-        ))}
 
-        {media.map((item) => (
-          <div
-            key={item.id}
-            className="bg-white border border-[#E6E2DA] rounded-2xl overflow-hidden flex flex-col"
-          >
-            <div className="aspect-[4/3] bg-[#F3F1EC]">
-              <ResilientImage src={item.url} alt={item.fileName} />
-            </div>
-            <div className="p-3 space-y-1.5">
-              <p className="text-xs font-medium text-[#18181B] truncate">{item.fileName}</p>
-              <div className="flex items-center justify-between text-[11px]">
+          <div className="flex items-center gap-3">
+            <select
+              value={mediaCategory}
+              onChange={(e) => setMediaCategory(e.target.value as MediaAsset['category'])}
+              className="px-3 py-2 text-xs bg-[#FAF9F6] border border-[#E6E2DA] rounded-xl"
+            >
+              <option value="imovel">Imóvel</option>
+              <option value="empreendimento">Empreendimento</option>
+              <option value="landing_page">Landing Page</option>
+              <option value="perfil">Perfil</option>
+              <option value="documento">Documento</option>
+            </select>
+
+            <label className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#1E4D5C] rounded-xl cursor-pointer whitespace-nowrap">
+              <Upload className="w-3.5 h-3.5" />
+              <span>{uploadingMedia ? 'Enviando...' : 'Enviar arquivos'}</span>
+              <input
+                type="file"
+                accept="image/*,video/*,.pdf"
+                multiple
+                disabled={uploadingMedia}
+                onChange={handleUploadMedia}
+                className="hidden"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          {Object.entries(ASSET_IMAGES).map(([key, url]) => (
+            <div
+              key={key}
+              className="bg-white border border-[#E6E2DA] rounded-2xl overflow-hidden flex flex-col"
+            >
+              <div className="aspect-[4/3] bg-[#F3F1EC]">
+                <ResilientImage src={url} alt={key} />
+              </div>
+              <div className="p-3 space-y-1">
+                <p className="text-xs font-medium text-[#18181B] truncate">{key}</p>
                 <button
                   type="button"
-                  onClick={() => navigator.clipboard.writeText(item.url)}
-                  className="font-medium text-[#1E4D5C] hover:underline cursor-pointer"
+                  onClick={() => navigator.clipboard.writeText(url)}
+                  className="text-[11px] font-medium text-[#1E4D5C] hover:underline cursor-pointer"
                 >
-                  Copiar URL
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await removeMediaAsset(item.id);
-                    await onRefresh();
-                  }}
-                  className="text-[#A1A1AA] hover:text-[#DC2626] cursor-pointer"
-                >
-                  Excluir
+                  Copiar caminho
                 </button>
               </div>
             </div>
-          </div>
-        ))}
+          ))}
+
+          {media.map((item) => (
+            <div
+              key={item.id}
+              className="bg-white border border-[#E6E2DA] rounded-2xl overflow-hidden flex flex-col"
+            >
+              <div className="aspect-[4/3] bg-[#F3F1EC]">
+                {item.contentType?.startsWith('video/') ? (
+                  <video
+                    src={item.url}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    className="w-full h-full object-cover bg-[#18181B]"
+                  />
+                ) : (
+                  <ResilientImage src={item.url} alt={item.fileName} />
+                )}
+              </div>
+              <div className="p-3 space-y-1.5">
+                <p className="text-xs font-medium text-[#18181B] truncate">{item.fileName}</p>
+                <div className="flex items-center justify-between text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard.writeText(item.url)}
+                    className="font-medium text-[#1E4D5C] hover:underline cursor-pointer"
+                  >
+                    Copiar URL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await removeMediaAsset(item.id);
+                      await onRefresh();
+                    }}
+                    className="text-[#A1A1AA] hover:text-[#DC2626] cursor-pointer"
+                  >
+                    Excluir
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
-  );
+    );
 }

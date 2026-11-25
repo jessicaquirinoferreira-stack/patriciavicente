@@ -9,11 +9,7 @@ import {
   DEFAULT_SITE_SETTINGS
 } from './lib/seedDefaults';
 import {
-  getPublicProfessionalProfile,
-  getPublicSiteSettings,
-  listPublicEmpreendimentos,
-  listPublicLandingPages,
-  listPublicProperties,
+  getPublicSnapshotUnified,
   trackAnalyticsEventUnified
 } from './services/adminStoreService';
 import type {
@@ -50,18 +46,12 @@ export default function App() {
   const [landingPages, setLandingPages] = useState<LandingPage[]>([DEFAULT_LANDING_PAGE]);
 
   const loadPublicData = useCallback(async () => {
-    const [s, prof, props, emps, lps] = await Promise.all([
-      getPublicSiteSettings(),
-      getPublicProfessionalProfile(),
-      listPublicProperties(),
-      listPublicEmpreendimentos(),
-      listPublicLandingPages()
-    ]);
-    setSettings(s);
-    setProfile(prof);
-    setProperties(props);
-    setEmpreendimentos(emps);
-    setLandingPages(lps);
+    const snap = await getPublicSnapshotUnified();
+    setSettings(snap.siteSettings);
+    setProfile(snap.professionalProfile);
+    setProperties(snap.properties);
+    setEmpreendimentos(snap.empreendimentos);
+    setLandingPages(snap.landingPages);
   }, []);
 
   useEffect(() => {
@@ -69,6 +59,12 @@ export default function App() {
     captureUtmFromLocation();
     loadPublicData();
   }, [loadPublicData]);
+
+  useEffect(() => {
+    if (!pathname.startsWith('/admin')) {
+      loadPublicData();
+    }
+  }, [pathname, loadPublicData]);
 
   useEffect(() => {
     const onPopState = () => {

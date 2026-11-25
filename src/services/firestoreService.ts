@@ -69,12 +69,14 @@ function stripEmpty<T extends Record<string, unknown>>(obj: T): Record<string, u
 // ============================================================================
 
 export async function getSiteSettings(): Promise<SiteSettings> {
-  const path = 'siteSettings/main';
   try {
     const snap = await getDoc(doc(db, 'siteSettings', 'main'));
     if (snap.exists()) {
       const merged = { ...DEFAULT_SITE_SETTINGS, ...snap.data(), id: snap.id } as SiteSettings;
-      if (!merged.logoUrl || merged.logoUrl.includes('Logo-Dourado-Patricia-Vicente-Imoveis.png')) {
+      if (
+        typeof merged.logoUrl === 'string' &&
+        merged.logoUrl.includes('Logo-Dourado-Patricia-Vicente-Imoveis.png')
+      ) {
         merged.logoUrl = DEFAULT_SITE_SETTINGS.logoUrl;
       }
       return merged;
@@ -91,7 +93,7 @@ export async function getProfessionalProfile(): Promise<ProfessionalProfile> {
     if (snap.exists()) {
       const merged = { ...DEFAULT_PROFESSIONAL_PROFILE, ...snap.data(), id: snap.id } as ProfessionalProfile;
       if (
-        !merged.portraitUrl ||
+        typeof merged.portraitUrl === 'string' &&
         merged.portraitUrl.includes('patricia_construction_portrait_1794928223577')
       ) {
         merged.portraitUrl = DEFAULT_PROFESSIONAL_PROFILE.portraitUrl;
@@ -453,7 +455,8 @@ export async function saveProperty(property: Omit<Property, 'id'> & { id?: strin
       description: property.description ? clampStr(property.description, 4000) : undefined,
       confirmationNote: property.confirmationNote ? clampStr(property.confirmationNote, 400) : undefined,
       coverImage: property.coverImage ? clampStr(property.coverImage, 500) : undefined,
-      gallery: clampList(property.gallery, 20, 500),
+      gallery: clampList(property.gallery, 100, 500),
+      videos: clampList(property.videos, 30, 500),
       features: clampList(property.features, 24, 160),
       empreendimentoId: property.empreendimentoId ? clampStr(property.empreendimentoId, 128) : undefined,
       featured: Boolean(property.featured),
@@ -461,7 +464,17 @@ export async function saveProperty(property: Omit<Property, 'id'> & { id?: strin
     });
 
     if (property.id) {
-      await updateDoc(doc(db, 'properties', property.id), { ...baseData, updatedAt: serverTimestamp() });
+      const docRef = doc(db, 'properties', property.id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        await updateDoc(docRef, { ...baseData, updatedAt: serverTimestamp() });
+      } else {
+        await setDoc(docRef, {
+          ...baseData,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
       return property.id;
     } else {
       const ref = await addDoc(collection(db, 'properties'), {
@@ -503,13 +516,24 @@ export async function saveEmpreendimento(
       description: emp.description ? clampStr(emp.description, 4000) : undefined,
       highlights: clampList(emp.highlights, 20, 180),
       coverImage: emp.coverImage ? clampStr(emp.coverImage, 500) : undefined,
-      gallery: clampList(emp.gallery, 20, 500),
+      gallery: clampList(emp.gallery, 100, 500),
+      videos: clampList(emp.videos, 30, 500),
       featured: Boolean(emp.featured),
       published: Boolean(emp.published)
     });
 
     if (emp.id) {
-      await updateDoc(doc(db, 'empreendimentos', emp.id), { ...baseData, updatedAt: serverTimestamp() });
+      const docRef = doc(db, 'empreendimentos', emp.id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        await updateDoc(docRef, { ...baseData, updatedAt: serverTimestamp() });
+      } else {
+        await setDoc(docRef, {
+          ...baseData,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
       return emp.id;
     } else {
       const ref = await addDoc(collection(db, 'empreendimentos'), {
@@ -579,7 +603,17 @@ export async function saveLandingPage(
     });
 
     if (lp.id) {
-      await updateDoc(doc(db, 'landingPages', lp.id), { ...baseData, updatedAt: serverTimestamp() });
+      const docRef = doc(db, 'landingPages', lp.id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        await updateDoc(docRef, { ...baseData, updatedAt: serverTimestamp() });
+      } else {
+        await setDoc(docRef, {
+          ...baseData,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
       return lp.id;
     } else {
       const ref = await addDoc(collection(db, 'landingPages'), {
@@ -719,7 +753,17 @@ export async function saveClient(client: Omit<Client, 'id'> & { id?: string }): 
     });
 
     if (client.id) {
-      await updateDoc(doc(db, 'clients', client.id), { ...baseData, updatedAt: serverTimestamp() });
+      const docRef = doc(db, 'clients', client.id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        await updateDoc(docRef, { ...baseData, updatedAt: serverTimestamp() });
+      } else {
+        await setDoc(docRef, {
+          ...baseData,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
       return client.id;
     } else {
       const ref = await addDoc(collection(db, 'clients'), {
@@ -763,7 +807,17 @@ export async function savePipelineItem(
     });
 
     if (item.id) {
-      await updateDoc(doc(db, 'pipeline', item.id), { ...baseData, updatedAt: serverTimestamp() });
+      const docRef = doc(db, 'pipeline', item.id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        await updateDoc(docRef, { ...baseData, updatedAt: serverTimestamp() });
+      } else {
+        await setDoc(docRef, {
+          ...baseData,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
       return item.id;
     } else {
       const ref = await addDoc(collection(db, 'pipeline'), {
@@ -812,7 +866,17 @@ export async function saveVisit(visit: Omit<Visit, 'id'> & { id?: string }): Pro
     });
 
     if (visit.id) {
-      await updateDoc(doc(db, 'visits', visit.id), { ...baseData, updatedAt: serverTimestamp() });
+      const docRef = doc(db, 'visits', visit.id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        await updateDoc(docRef, { ...baseData, updatedAt: serverTimestamp() });
+      } else {
+        await setDoc(docRef, {
+          ...baseData,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
       return visit.id;
     } else {
       const ref = await addDoc(collection(db, 'visits'), {
@@ -820,7 +884,6 @@ export async function saveVisit(visit: Omit<Visit, 'id'> & { id?: string }): Pro
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
-      // Automação simples: cria tarefa de confirmação de visita
       await addDoc(collection(db, 'tasks'), {
         title: `Confirmar visita com ${clampStr(visit.clientName, 100)}`,
         description: `Imóvel: ${clampStr(visit.propertyTitle, 120)} · Horário: ${clampStr(visit.scheduledAt, 40)}`,
@@ -864,7 +927,17 @@ export async function saveProposal(proposal: Omit<Proposal, 'id'> & { id?: strin
     });
 
     if (proposal.id) {
-      await updateDoc(doc(db, 'proposals', proposal.id), { ...baseData, updatedAt: serverTimestamp() });
+      const docRef = doc(db, 'proposals', proposal.id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        await updateDoc(docRef, { ...baseData, updatedAt: serverTimestamp() });
+      } else {
+        await setDoc(docRef, {
+          ...baseData,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
       return proposal.id;
     } else {
       const ref = await addDoc(collection(db, 'proposals'), {
@@ -903,7 +976,17 @@ export async function saveTask(task: Omit<Task, 'id'> & { id?: string }): Promis
     });
 
     if (task.id) {
-      await updateDoc(doc(db, 'tasks', task.id), { ...baseData, updatedAt: serverTimestamp() });
+      const docRef = doc(db, 'tasks', task.id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        await updateDoc(docRef, { ...baseData, updatedAt: serverTimestamp() });
+      } else {
+        await setDoc(docRef, {
+          ...baseData,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
       return task.id;
     } else {
       const ref = await addDoc(collection(db, 'tasks'), {
@@ -927,8 +1010,8 @@ export async function removeTask(id: string): Promise<void> {
   }
 }
 
-export async function saveMediaAsset(asset: Omit<MediaAsset, 'id'>): Promise<string> {
-  const path = 'media';
+export async function saveMediaAsset(asset: Omit<MediaAsset, 'id'> & { id?: string }): Promise<string> {
+  const path = asset.id ? `media/${asset.id}` : 'media';
   try {
     const payload = stripEmpty({
       url: clampStr(asset.url, 600),
@@ -940,7 +1023,11 @@ export async function saveMediaAsset(asset: Omit<MediaAsset, 'id'>): Promise<str
       storageProvider: asset.storageProvider,
       createdAt: serverTimestamp()
     });
-    const ref = await addDoc(collection(db, path), payload);
+    if (asset.id) {
+      await setDoc(doc(db, 'media', asset.id), payload);
+      return asset.id;
+    }
+    const ref = await addDoc(collection(db, 'media'), payload);
     return ref.id;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);

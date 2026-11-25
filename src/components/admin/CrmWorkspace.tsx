@@ -37,6 +37,7 @@ import {
   saveVisit,
   updateLeadAdmin
 } from '../../services/adminStoreService';
+import { uploadMediaWithCompression } from '../../services/blobUploadService';
 import { buildWhatsAppUrl } from '../../utils/utm';
 
 interface CrmWorkspaceProps {
@@ -210,32 +211,14 @@ export function CrmWorkspace({
     if (!file) return;
     setProposalFileUploading(true);
     try {
-      const reader = new FileReader();
-      const base64 = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
+      const uploaded = await uploadMediaWithCompression(file, {
+        category: 'documento'
       });
-
-      const res = await fetch('/api/blob/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: file.name,
-          contentType: file.type,
-          base64Data: base64,
-          folder: 'propostas'
-        })
-      });
-
-      if (res.ok) {
-        const json = await res.json();
-        setProposalDocUrl(json.url);
-        setProposalDocName(file.name);
-      } else {
-        setProposalDocName(`${file.name} (referência local)`);
-        setProposalDocUrl(`local-doc://${encodeURIComponent(file.name)}`);
-      }
+      setProposalDocUrl(uploaded.url);
+      setProposalDocName(file.name);
+    } catch {
+      setProposalDocName(`${file.name} (falha ao enviar)`);
+      setProposalDocUrl('');
     } finally {
       setProposalFileUploading(false);
     }
